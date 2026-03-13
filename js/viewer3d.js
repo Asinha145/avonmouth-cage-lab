@@ -88,7 +88,7 @@ class Viewer3D {
 
         // web-ifc WASM
         this.ifcapi = new WebIFC.IfcAPI();
-        this.ifcapi.SetWasmPath('./lib/');
+        this.ifcapi.SetWasmPath('./');
         await this.ifcapi.Init();
         console.log('[Viewer3D] web-ifc WASM ready');
     }
