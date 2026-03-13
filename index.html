@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IFC Rebar Analyzer v2</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div class="container">
+
+    <header>
+        <h1>🏗️ IFC Rebar Analyzer</h1>
+        <p class="subtitle">Avonmouth Dock Wall · Rebar cage analysis with BREP 3D preview</p>
+    </header>
+
+    <main>
+        <!-- ══ UPLOAD + 3D VIEWER ══════════════════════════════════════════ -->
+        <section class="upload-section">
+            <h2>Upload IFC File</h2>
+            <div class="upload-and-viewer">
+
+                <!-- left col: file picker -->
+                <div class="upload-col">
+                    <div class="upload-container-single">
+                        <div class="upload-box-large" id="upload-drop-zone">
+                            <h3>Cage IFC File</h3>
+                            <input type="file" id="ifc-file" accept=".txt,.ifc">
+                            <label for="ifc-file" class="file-label">
+                                <span class="file-icon">📄</span>Choose IFC Cage File
+                            </label>
+                            <p class="drop-hint">or drag &amp; drop a .ifc / .txt file here</p>
+                            <p class="file-name" id="ifc-filename">No file selected</p>
+                        </div>
+                    </div>
+                    <button id="process-btn" class="btn-primary" disabled>Analyse Cage</button>
+                    <div id="progress-container" class="hidden">
+                        <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
+                        <p id="progress-text">Processing…</p>
+                    </div>
+                </div>
+
+                <!-- right col: web-ifc BREP viewer -->
+                <div class="viewer-col hidden" id="viewer-col">
+                    <div class="viewer-header">
+                        <span class="viewer-title">🧱 3D Cage Preview</span>
+                        <span class="viewer-hint">Drag · Scroll · Right-drag pan</span>
+                        <div class="viewcube-wrap">
+                            <button class="viewcube-btn" data-view="front"  title="Front">Front</button>
+                            <button class="viewcube-btn" data-view="back"   title="Back">Back</button>
+                            <button class="viewcube-btn" data-view="left"   title="Left">Left</button>
+                            <button class="viewcube-btn" data-view="right"  title="Right">Right</button>
+                            <button class="viewcube-btn" data-view="top"    title="Top">Top</button>
+                            <button class="viewcube-btn" data-view="bottom" title="Bottom">Bot</button>
+                        </div>
+                        <button class="viewer-filter-toggle" id="viewer-filter-toggle" title="Show/hide layer filter">⚙ Layers</button>
+                    </div>
+                    <div class="viewer-filter-panel hidden" id="viewer-filter-panel">
+                        <div class="viewer-filter-row">
+                            <button class="viewer-filter-all" id="viewer-check-all">✓ All</button>
+                            <button class="viewer-filter-all" id="viewer-check-none">✗ None</button>
+                            <span class="viewer-filter-hint">Select layers to display</span>
+                        </div>
+                        <div class="viewer-checkboxes" id="viewer-checkboxes"></div>
+                    </div>
+                    <div id="threejs-container"></div>
+                    <div class="viewer-legend" id="viewer-legend"></div>
+                </div>
+
+            </div>
+        </section>
+
+        <!-- ══ RESULTS ══════════════════════════════════════════════════════ -->
+        <section class="results-section hidden" id="results-section">
+            <h2>Analysis Results</h2>
+
+            <!-- Rejection banner -->
+            <div id="rejection-banner" class="rejection-banner hidden">
+                <div class="rejection-header">
+                    <span class="rejection-icon">🚫</span>
+                    <span class="rejection-title">C01 REJECTED</span>
+                    <span class="rejection-subtitle">This cage file has data quality issues that require correction before acceptance.</span>
+                </div>
+                <ul id="rejection-reasons" class="rejection-reasons"></ul>
+                <p class="rejection-note">Analysis is shown below for diagnostic purposes only.</p>
+            </div>
+
+            <!-- C01 detail cards -->
+            <div id="c01-cards-row" class="c01-cards-row hidden">
+                <div class="c01-card c01-card--unknown hidden" id="c01-unknown-card">
+                    <div class="c01-card-icon">⚠️</div>
+                    <div class="c01-card-body">
+                        <div class="c01-card-title">Unknown Bar Type</div>
+                        <div class="c01-card-count" id="c01-unknown-count">0</div>
+                        <div class="c01-card-sub">No ATK layer name matched</div>
+                    </div>
+                    <a class="c01-card-link" id="c01-unknown-link" target="_blank">View table ↗</a>
+                </div>
+                <div class="c01-card c01-card--unknown hidden" id="c01-missing-layer-card">
+                    <div class="c01-card-icon">🏷️</div>
+                    <div class="c01-card-body">
+                        <div class="c01-card-title">Missing Avonmouth Layer</div>
+                        <div class="c01-card-count" id="c01-missing-layer-count">0</div>
+                        <div class="c01-card-sub">No Avonmouth Layer/Set in IFC pset</div>
+                    </div>
+                    <a class="c01-card-link" id="c01-missing-layer-link" target="_blank">View table ↗</a>
+                </div>
+                <div class="c01-card c01-card--dup hidden" id="c01-dup-card">
+                    <div class="c01-card-icon">🔁</div>
+                    <div class="c01-card-body">
+                        <div class="c01-card-title">Duplicate GlobalIds</div>
+                        <div class="c01-card-count" id="c01-dup-count">0</div>
+                        <div class="c01-card-sub">Same GUID appearing more than once</div>
+                    </div>
+                    <a class="c01-card-link" id="c01-dup-link" target="_blank">View table ↗</a>
+                </div>
+                <div class="c01-card c01-card--weight hidden" id="c01-weight-card">
+                    <div class="c01-card-icon">⚖️</div>
+                    <div class="c01-card-body">
+                        <div class="c01-card-title">Missing ATK/ICOS Weight</div>
+                        <div class="c01-card-count" id="c01-weight-count">0</div>
+                        <div class="c01-card-sub">Weight calculated by formula only</div>
+                    </div>
+                    <a class="c01-card-link" id="c01-weight-link" target="_blank">View table ↗</a>
+                </div>
+            </div>
+
+            <!-- Cage axis badge -->
+            <div class="cage-axis-banner">
+                <span class="cage-axis-label">🧭 Auto-detected cage axis:</span>
+                <span class="cage-axis-value" id="cage-axis-info">—</span>
+                <span class="cage-axis-note">Orientation determined purely from bar geometry</span>
+            </div>
+
+            <!-- Top stat cards -->
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <h3>Total Bars</h3>
+                    <p class="stat-value" id="total-count">0</p>
+                </div>
+                <div class="stat-card">
+                    <h3>Mesh Bars</h3>
+                    <p class="stat-value" id="mesh-count">0</p>
+                </div>
+                <div class="stat-card">
+                    <h3>UDL Factor</h3>
+                    <p class="stat-value" id="udl-value">0.0000</p>
+                    <p class="stat-sublabel">Non-mesh ÷ Mesh (formula weight)</p>
+                </div>
+            </div>
+            <span id="unknown-count"        style="display:none">0</span>
+            <span id="duplicate-count"      style="display:none">0</span>
+            <span id="missing-weight-count" style="display:none">0</span>
+
+            <!-- Cage dimension boxes -->
+            <div class="dim-boxes-section">
+                <div class="dim-box">
+                    <div class="dim-icon">↔</div>
+                    <div class="dim-label">Overall Width</div>
+                    <div class="dim-value" id="dim-width">—</div>
+                </div>
+                <div class="dim-box">
+                    <div class="dim-icon">↕</div>
+                    <div class="dim-label">Overall Length</div>
+                    <div class="dim-value" id="dim-length">—</div>
+                </div>
+                <div class="dim-box">
+                    <div class="dim-icon">↑</div>
+                    <div class="dim-label">Overall Height</div>
+                    <div class="dim-value" id="dim-height">—</div>
+                </div>
+                <div class="dim-box">
+                    <div class="dim-icon">🔩</div>
+                    <div class="dim-label">Couplered Bars</div>
+                    <div class="dim-value dim-no" id="dim-coupler">—</div>
+                </div>
+                <div class="dim-box dim-box-tbd">
+                    <div class="dim-icon">📐</div>
+                    <div class="dim-label">Step in Cage</div>
+                    <div class="dim-value dim-tbd" id="dim-step">—</div>
+                </div>
+            </div>
+
+            <!-- Bar type distribution -->
+            <div class="bar-types-section">
+                <h3>Bar Type Distribution</h3>
+                <div class="bar-types-grid" id="bar-types-grid"></div>
+            </div>
+
+            <!-- Block 1: Horizontal bars -->
+            <div class="analysis-block">
+                <div class="analysis-block-header">
+                    <span class="block-icon">↔️</span>
+                    <div>
+                        <h3>Horizontal Bars per Mesh Layer</h3>
+                        <p class="block-desc">Unique horizontal bar positions per layer. Stagger-split bars counted as one.</p>
+                    </div>
+                </div>
+                <div class="mesh-stats-grid" id="mesh-horizontal-grid"></div>
+            </div>
+
+            <!-- Block 2: Cage height -->
+            <div class="analysis-block">
+                <div class="analysis-block-header">
+                    <span class="block-icon">↕️</span>
+                    <div>
+                        <h3>Cage Height &amp; Bar Diameters per Mesh Layer</h3>
+                        <p class="block-desc">Height = full Z-extent. Blue = horizontal ⌀. Green = vertical ⌀.</p>
+                    </div>
+                </div>
+                <div class="mesh-stats-grid" id="mesh-height-grid"></div>
+            </div>
+
+            <!-- Block 3: Weight table -->
+            <div class="analysis-block">
+                <div class="analysis-block-header">
+                    <span class="block-icon">⚖️</span>
+                    <div>
+                        <h3>Total Weight &amp; Bar Count by Layer</h3>
+                        <p class="block-desc">Weight (kg) from ATK/ICOS Rebar pset. Red rows = missing layer.</p>
+                    </div>
+                </div>
+                <div class="table-wrapper">
+                    <table class="layer-weight-table">
+                        <thead>
+                            <tr><th>Layer / Set</th><th>Type</th><th>Bar Count</th><th>Weight (kg)</th><th>% of Total</th></tr>
+                        </thead>
+                        <tbody id="layer-weight-tbody"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Block 4: Step detection -->
+            <div class="analysis-block" id="step-block">
+                <div class="analysis-block-header">
+                    <span class="block-icon">📐</span>
+                    <div>
+                        <h3>Step Detection in Cage</h3>
+                        <p class="block-desc">
+                            Vertical mesh bars at the same XY position (±50 mm). A step is reported when tops differ by 15–300 mm.
+                        </p>
+                    </div>
+                    <button class="run-analysis-btn" id="run-step-btn">▶ Re-run Step Check</button>
+                </div>
+                <div id="step-results" class="analysis-subblock hidden">
+                    <div id="step-summary" class="clash-summary"></div>
+                    <div class="table-wrapper" id="step-table-wrap" style="display:none">
+                        <table class="layer-weight-table">
+                            <thead>
+                                <tr><th>#</th><th>Grid X (mm)</th><th>Grid Y (mm)</th><th>Bar Count</th><th>Layers</th><th>Min Top Z (mm)</th><th>Max Top Z (mm)</th><th>Step (mm)</th></tr>
+                            </thead>
+                            <tbody id="step-tbody"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Data table -->
+            <div class="table-container">
+                <div class="table-controls">
+                    <div class="search-wrap">
+                        <span class="search-icon">🔍</span>
+                        <input type="text" id="search-input" placeholder="Search shape code, layer, bar mark, size, length…" class="search-input">
+                        <span class="result-count" id="result-count"></span>
+                    </div>
+                    <select id="bartype-filter" class="filter-select">
+                        <option value="all">All Bar Types</option>
+                        <option value="Mesh">Mesh Only</option>
+                        <option value="Unknown">Unknown Only</option>
+                        <option value="Link Bar">Link Bars</option>
+                        <option value="Loose Bar">Loose Bars</option>
+                        <option value="Strut Bar">Strut Bars</option>
+                        <option value="Preload Bar">Preload Bars</option>
+                    </select>
+                </div>
+                <div class="table-wrapper">
+                    <table id="results-table">
+                        <thead>
+                            <tr>
+                                <th>Shape Code</th><th>Layer</th><th>Bar Type</th>
+                                <th>Size</th><th>Length</th><th>Rebar Mark</th><th>Bar Shape</th>
+                            </tr>
+                        </thead>
+                        <tbody id="results-tbody"></tbody>
+                    </table>
+                </div>
+                <div id="table-pagination" class="pagination hidden">
+                    <button id="page-prev" class="page-btn">← Prev</button>
+                    <span id="page-info" class="page-info"></span>
+                    <button id="page-next" class="page-btn">Next →</button>
+                </div>
+            </div>
+
+            <div class="export-section">
+                <h3>Export Results</h3>
+                <p class="export-note">CSV includes layer, coordinates, cage axis, stagger cluster IDs</p>
+                <button id="export-excel-btn" class="btn-secondary">📊 Export to Excel/CSV</button>
+                <button id="export-csv-btn"   class="btn-secondary">📄 Download CSV</button>
+            </div>
+        </section>
+
+        <!-- Documentation / samples -->
+        <section class="documentation-section">
+            <h2>Sample Files</h2>
+            <div class="samples-section">
+                <p class="samples-desc">Sample Avonmouth cage IFC files for testing.</p>
+                <div class="samples-grid">
+                    <div class="sample-card">
+                        <div class="sample-icon">✅</div>
+                        <div class="sample-info">
+                            <div class="sample-name">P165_C2.txt</div>
+                            <div class="sample-meta">409 bars · Z-axis · C01 Accepted</div>
+                            <div class="sample-desc">Standard upright cage</div>
+                        </div>
+                        <a href="examples/P165_C2.txt" download class="sample-dl-btn">Download</a>
+                    </div>
+                    <div class="sample-card">
+                        <div class="sample-icon">✅</div>
+                        <div class="sample-info">
+                            <div class="sample-name">P7019_C1.ifc</div>
+                            <div class="sample-meta">990 bars · Z-axis · C01 Accepted</div>
+                            <div class="sample-desc">Complex staggered bar clustering</div>
+                        </div>
+                        <a href="examples/P7019_C1.ifc" download class="sample-dl-btn">Download</a>
+                    </div>
+                </div>
+                <button class="btn-secondary sample-dl-all" id="download-all-samples-btn">⬇ Download All Samples as ZIP</button>
+            </div>
+        </section>
+    </main>
+
+    <footer>
+        <p>IFC Rebar Analyzer v2 &copy; 2026 · Avonmouth Dock Wall · LOR/Bylor JV · <a href="https://github.com/Asinha145/ifc-rebar-analyzer-v2">GitHub</a></p>
+    </footer>
+</div>
+
+<!-- Three.js r128 -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<!-- web-ifc WASM (browser IIFE bundle) -->
+<script src="lib/web-ifc-api-iife.js"></script>
+<!-- App scripts -->
+<script src="js/ifc-parser.js"></script>
+<script src="js/viewer3d.js"></script>
+<script src="js/main.js"></script>
+</body>
+</html>
