@@ -215,7 +215,7 @@ function displayResults(parser) {
 
     // Rejection banner
     const banner   = document.getElementById('rejection-banner');
-    const rejected = parser.isRejected || preloadMisCount > 0;
+    const rejected = parser.isRejected;
     if (rejected) {
         const reasons = [];
         if (parser.unknownCount > 0)
@@ -226,13 +226,25 @@ function displayResults(parser) {
             reasons.push(`${parser.duplicateCount} duplicate GlobalId${parser.duplicateCount > 1 ? 's' : ''}`);
         if (parser.missingWeightCount > 0)
             reasons.push(`${parser.missingWeightCount} bar${parser.missingWeightCount > 1 ? 's' : ''} missing ATK/ICOS Weight`);
-        if (preloadMisCount > 0)
-            reasons.push(`${preloadMisCount} preload bar${preloadMisCount > 1 ? 's' : ''} with PRL/PRC label mismatch`);
         document.getElementById('rejection-reasons').innerHTML =
             reasons.map(r => `<li>${r}</li>`).join('');
         banner.classList.remove('hidden');
     } else {
         banner.classList.add('hidden');
+    }
+
+    // Warning banner (non-blocking)
+    const warnBanner = document.getElementById('warning-banner');
+    if (warnBanner) {
+        const warns = [];
+        if (preloadMisCount > 0)
+            warns.push(`${preloadMisCount} preload bar${preloadMisCount > 1 ? 's' : ''} with PRL/PRC label mismatch — review geometry`);
+        if (warns.length) {
+            document.getElementById('warning-reasons').innerHTML = warns.map(r => `<li>${r}</li>`).join('');
+            warnBanner.classList.remove('hidden');
+        } else {
+            warnBanner.classList.add('hidden');
+        }
     }
 
     // Cage axis badge
@@ -934,10 +946,10 @@ async function exportEDB(type) {
             .replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 40);
 
         const outBuf = await wb.outputAsync();
-        const blob = new Blob([outBuf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+        const blob = new Blob([outBuf], { type: 'application/vnd.ms-excel.sheet.macroenabled.12' });
         const url  = URL.createObjectURL(blob);
         const a    = document.createElement('a');
-        a.href = url; a.download = `${cageRef}-EDB-${type}.xlsx`;
+        a.href = url; a.download = `${cageRef}-EDB-${type}.xlsm`;
         document.body.appendChild(a); a.click();
         document.body.removeChild(a); URL.revokeObjectURL(url);
     } catch (e) {
