@@ -385,17 +385,17 @@
 
             <div class="export-section">
                 <h3>Export Results</h3>
-                <p class="export-note">CSV includes layer, coordinates, cage axis, stagger cluster IDs</p>
+                <p class="export-note">Includes layer, coordinates, cage axis, stagger cluster IDs</p>
                 <button id="export-excel-btn" class="btn-secondary">📊 Bar Schedule Excel</button>
-                <button id="export-csv-btn"   class="btn-secondary">📄 Download CSV</button>
 
                 <!-- EDB Design Sheet Downloads -->
                 <div class="edb-section">
                     <h4>EDB Design Sheets</h4>
-                    <p class="edb-note">Populates U-bar and Strut EDB templates from cage IFC data. Wall thickness and lifting span are required design inputs.</p>
+                    <p class="edb-note">Populates U-bar and Strut EDB templates from cage IFC data. Wall thickness is auto-computed from cage width + 100 mm cover, rounded to the nearest standard size.</p>
                     <div class="edb-inputs">
-                        <label>Wall Thickness (mm)
-                            <input type="number" id="edb-wall-thickness" placeholder="e.g. 1200" min="100" max="3000" step="50">
+                        <label>Wall Thickness (m)
+                            <input type="number" id="edb-wall-thickness" placeholder="auto" min="0.1" max="3.0" step="0.1">
+                            <span style="font-size:.75rem;color:#888;margin-top:2px" id="edb-wall-hint"></span>
                         </label>
                         <label>Structural Span (m)
                             <input type="number" id="edb-structural-span" placeholder="e.g. 1.8" min="0.1" max="10" step="0.1">
