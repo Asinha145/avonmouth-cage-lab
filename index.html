@@ -5,8 +5,84 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>IFC Rebar Analyzer v2</title>
     <link rel="stylesheet" href="css/style.css">
+    <style>
+        /* ── PIN GATE ────────────────────────────────────────────────── */
+        #pin-gate{position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;
+            background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);}
+        #pin-gate.hidden{display:none;}
+        .pin-box{background:white;border-radius:20px;padding:48px 56px;text-align:center;
+            box-shadow:0 24px 64px rgba(0,0,0,.35);max-width:380px;width:90%;}
+        .pin-box h2{color:#667eea;font-size:1.7rem;margin-bottom:8px;}
+        .pin-box p{color:#666;font-size:.95rem;margin-bottom:32px;}
+        .pin-digits{display:flex;gap:14px;justify-content:center;margin-bottom:28px;}
+        .pin-digit{width:56px;height:64px;border:2px solid #d1d5db;border-radius:12px;
+            font-size:1.8rem;font-weight:700;text-align:center;color:#333;
+            transition:border-color .2s,box-shadow .2s;outline:none;}
+        .pin-digit:focus{border-color:#667eea;box-shadow:0 0 0 3px rgba(102,126,234,.25);}
+        .pin-digit.filled{border-color:#667eea;background:#f5f3ff;}
+        .pin-error{color:#e53e3e;font-size:.9rem;min-height:20px;margin-bottom:16px;}
+        @keyframes pin-shake{0%,100%{transform:translateX(0)}20%,60%{transform:translateX(-8px)}40%,80%{transform:translateX(8px)}}
+        .pin-digits.shake{animation:pin-shake .4s ease;}
+    </style>
 </head>
 <body>
+
+<!-- ── PIN GATE ──────────────────────────────────────────────────────── -->
+<div id="pin-gate">
+    <div class="pin-box">
+        <h2>🔒 Access Required</h2>
+        <p>Enter your 4-digit access code to continue</p>
+        <div class="pin-digits" id="pin-digits">
+            <input class="pin-digit" type="password" maxlength="1" inputmode="numeric" pattern="[0-9]" autocomplete="off" id="pd0">
+            <input class="pin-digit" type="password" maxlength="1" inputmode="numeric" pattern="[0-9]" autocomplete="off" id="pd1">
+            <input class="pin-digit" type="password" maxlength="1" inputmode="numeric" pattern="[0-9]" autocomplete="off" id="pd2">
+            <input class="pin-digit" type="password" maxlength="1" inputmode="numeric" pattern="[0-9]" autocomplete="off" id="pd3">
+        </div>
+        <div class="pin-error" id="pin-error"></div>
+    </div>
+</div>
+<script>
+(function(){
+    if(sessionStorage.getItem('pinVerified')==='1'){
+        document.getElementById('pin-gate').classList.add('hidden'); return;
+    }
+    const digits=[...document.querySelectorAll('.pin-digit')];
+    const err=document.getElementById('pin-error');
+    const wrap=document.getElementById('pin-digits');
+    digits[0].focus();
+    digits.forEach((d,i)=>{
+        d.addEventListener('input',()=>{
+            d.value=d.value.replace(/\D/g,'');
+            if(d.value.length===1){d.classList.add('filled');if(i<3)digits[i+1].focus();else checkPin();}
+        });
+        d.addEventListener('keydown',e=>{
+            if(e.key==='Backspace'&&!d.value&&i>0){digits[i-1].value='';digits[i-1].classList.remove('filled');digits[i-1].focus();}
+            if(e.key==='Enter')checkPin();
+        });
+        d.addEventListener('paste',e=>{
+            e.preventDefault();
+            const txt=(e.clipboardData||window.clipboardData).getData('text').replace(/\D/g,'').slice(0,4);
+            [...txt].forEach((ch,j)=>{if(digits[i+j]){digits[i+j].value=ch;digits[i+j].classList.add('filled');}});
+            const next=Math.min(i+txt.length,3);digits[next].focus();
+            if(txt.length===4)checkPin();
+        });
+    });
+    function checkPin(){
+        const entered=digits.map(d=>d.value).join('');
+        if(entered.length<4){err.textContent='Enter all 4 digits.';return;}
+        if(entered==='4286'){
+            sessionStorage.setItem('pinVerified','1');
+            document.getElementById('pin-gate').classList.add('hidden');
+        } else {
+            err.textContent='Incorrect code. Try again.';
+            wrap.classList.add('shake');
+            digits.forEach(d=>{d.value='';d.classList.remove('filled');});
+            setTimeout(()=>wrap.classList.remove('shake'),400);
+            digits[0].focus();
+        }
+    }
+})();
+</script>
 <div class="container">
 
     <header>
@@ -338,6 +414,8 @@
 
 <!-- Three.js r128 -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<!-- SheetJS for Excel export -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <!-- web-ifc WASM (browser IIFE bundle) -->
 <script src="lib/web-ifc-api-iife.js"></script>
 <!-- App scripts -->

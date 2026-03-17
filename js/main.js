@@ -58,7 +58,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     document.getElementById('search-input').addEventListener('input', applyFilters);
     document.getElementById('bartype-filter').addEventListener('change', applyFilters);
-    document.getElementById('export-excel-btn').addEventListener('click', () => exportCSV('rebar_analysis.csv'));
+    document.getElementById('export-excel-btn').addEventListener('click', () => exportXLSX());
     document.getElementById('export-csv-btn').addEventListener('click',   () => exportCSV('rebar_analysis.csv'));
 
     document.getElementById('page-prev').addEventListener('click', () => {
@@ -690,6 +690,78 @@ function exportCSV(filename) {
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob); a.download = filename; a.click();
+}
+
+// ── Export Excel (SheetJS) ──────────────────────────────────────────────
+
+function exportXLSX() {
+    if (!allData.length) { alert('No data to export.'); return; }
+    if (typeof XLSX === 'undefined') { alert('Excel library not loaded. Check your connection.'); return; }
+
+    const wb = XLSX.utils.book_new();
+
+    // ── Sheet 1: Bar Schedule ──────────────────────────────────────────
+    const scheduleRows = allData.map(b => ({
+        'GlobalId':            b.GlobalId || '',
+        'Rebar Mark':          b.Rebar_Mark || '',
+        'Full Rebar Mark':     b.Full_Rebar_Mark || '',
+        'Avonmouth Layer':     b.Avonmouth_Layer_Set || '',
+        'ATK Layer Name':      b.ATK_Layer_Name || '',
+        'Eff. Mesh Layer':     b.Effective_Mesh_Layer || '',
+        'Bar Type':            b.Bar_Type || '',
+        'Orientation':         b.Orientation || '',
+        'Shape Code':          b.Shape_Code_Base || b.Shape_Code || '',
+        'Coupler Suffix':      b.Coupler_Suffix || '',
+        'Bar Shape':           b.Bar_Shape || '',
+        'Size (mm)':           b.Size ? Number(b.Size) : '',
+        'Length (mm)':         b.Length ? Number(b.Length) : '',
+        'Weight (kg)':         b.Weight || b.Calculated_Weight ? Number(b.Weight || b.Calculated_Weight) : '',
+        'Start X (mm)':        b.Start_X != null ? +b.Start_X.toFixed(1) : '',
+        'Start Y (mm)':        b.Start_Y != null ? +b.Start_Y.toFixed(1) : '',
+        'Start Z (mm)':        b.Start_Z != null ? +b.Start_Z.toFixed(1) : '',
+        'End X (mm)':          b.End_X   != null ? +b.End_X.toFixed(1)   : '',
+        'End Y (mm)':          b.End_Y   != null ? +b.End_Y.toFixed(1)   : '',
+        'End Z (mm)':          b.End_Z   != null ? +b.End_Z.toFixed(1)   : '',
+        'Cage Axis':           cageAxisName || '',
+        'Stagger Cluster ID':  b.Stagger_Cluster_ID || '',
+    }));
+    const ws1 = XLSX.utils.json_to_sheet(scheduleRows);
+    // Column widths
+    ws1['!cols'] = [
+        {wch:36},{wch:18},{wch:22},{wch:18},{wch:20},{wch:18},
+        {wch:14},{wch:13},{wch:12},{wch:14},{wch:12},
+        {wch:10},{wch:12},{wch:12},
+        {wch:14},{wch:14},{wch:14},{wch:14},{wch:14},{wch:14},
+        {wch:12},{wch:18},
+    ];
+    XLSX.utils.book_append_sheet(wb, ws1, 'Bar Schedule');
+
+    // ── Sheet 2: Layer Summary ─────────────────────────────────────────
+    const layerMap = {};
+    allData.forEach(b => {
+        const key = b.Avonmouth_Layer_Set || 'Unknown';
+        if (!layerMap[key]) layerMap[key] = { layer: key, type: b.Bar_Type || '', count: 0, weight: 0 };
+        layerMap[key].count++;
+        layerMap[key].weight += Number(b.Weight || b.Calculated_Weight || 0);
+    });
+    const totalWeight = Object.values(layerMap).reduce((s, r) => s + r.weight, 0);
+    const summaryRows = Object.values(layerMap)
+        .sort((a, b) => b.weight - a.weight)
+        .map(r => ({
+            'Layer / Set':  r.layer,
+            'Bar Type':     r.type,
+            'Bar Count':    r.count,
+            'Weight (kg)':  +r.weight.toFixed(2),
+            '% of Total':   totalWeight > 0 ? +(r.weight / totalWeight * 100).toFixed(1) : 0,
+        }));
+    const ws2 = XLSX.utils.json_to_sheet(summaryRows);
+    ws2['!cols'] = [{wch:18},{wch:14},{wch:12},{wch:14},{wch:12}];
+    XLSX.utils.book_append_sheet(wb, ws2, 'Layer Summary');
+
+    // ── Filename with cage ref if available ───────────────────────────
+    const cageRef = (document.getElementById('ifc-filename').textContent || 'cage')
+        .replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 40);
+    XLSX.writeFile(wb, `${cageRef}_rebar_schedule.xlsx`);
 }
 
 // ── C01 detail cards ───────────────────────────────────────────────────
