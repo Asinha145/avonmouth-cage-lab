@@ -825,8 +825,12 @@ function computeLayerStatsForEDB() {
 }
 
 function _cageXYSpans() {
+    // Use only mesh bars — non-mesh bars (PRC preload, lacers, links, stirrups)
+    // extend outside the cage envelope and inflate the bounding box.
+    const src = allData.filter(b => b.Bar_Type === 'Mesh');
+    if (!src.length) return null;
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-    allData.forEach(b => {
+    src.forEach(b => {
         if (b.Start_X == null) return;
         const r = (b.Size || 0) / 2;
         minX = Math.min(minX, b.Start_X - r, b.End_X - r);
