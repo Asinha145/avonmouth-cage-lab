@@ -180,7 +180,7 @@ class Viewer3D {
             const tMesh = new THREE.Mesh(geo, mat);
             tMesh.userData.expressID = eid;
 
-            const groupKey = bar ? (bar.Avonmouth_Layer_Set || bar.Bar_Type || 'Unknown') : 'Unknown';
+            const groupKey = (bar && bar._prlPrcMismatch) ? 'PRL/PRC Mismatch' : (bar ? (bar.Avonmouth_Layer_Set || bar.Bar_Type || 'Unknown') : 'Unknown');
             if (!this.layerGroups.has(groupKey)) {
                 const g = new THREE.Group();
                 g.name = groupKey;
@@ -262,6 +262,7 @@ class Viewer3D {
     // ── Bar colour by layer ──────────────────────────────────────────────
     _barColour(bar) {
         if (!bar) return 0x888888;
+        if (bar._prlPrcMismatch) return 0xFFD700; // bright gold — PRL/PRC label mismatch
 
         const layer = (bar.Avonmouth_Layer_Set || '').toUpperCase();
         const type  = bar.Bar_Type || 'Unknown';
