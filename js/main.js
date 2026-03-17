@@ -798,11 +798,14 @@ function computeLayerStatsForEDB() {
         const hBars  = bars.filter(b => b.Orientation === 'Horizontal');
         const vBars  = bars.filter(b => b.Orientation === 'Vertical');
         const hSizes = hBars.map(b => b.Size).filter(s => s > 0);
+        const vSizes = vBars.map(b => b.Size).filter(s => s > 0);
         const vH     = heightAlongAxis(vBars);
         stats[layer] = {
             hDiaMin:    hSizes.length ? Math.min(...hSizes) : null,
             hDiaMax:    hSizes.length ? Math.max(...hSizes) : null,
             nLacers:    countUniqueHorizPositions(hBars).count,
+            vDiaMin:    vSizes.length ? Math.min(...vSizes) : null,
+            vDiaMax:    vSizes.length ? Math.max(...vSizes) : null,
             vHeightMax: vH ? vH.height : null,
         };
     }
@@ -863,7 +866,7 @@ function updateEDBComputedInfo() {
 
 async function exportEDB(type) {
     if (!allData.length) { alert('No data to export.'); return; }
-    if (typeof XLSX === 'undefined') { alert('Excel library not loaded.'); return; }
+    if (typeof XlsxPopulate === 'undefined') { alert('Excel library not loaded.'); return; }
 
     const wallM  = parseFloat(document.getElementById('edb-wall-thickness').value);
     if (isNaN(wallM) || wallM <= 0) { alert('Wall thickness missing — analyse a cage first.'); return; }
@@ -877,8 +880,9 @@ async function exportEDB(type) {
 
     const layerStats = computeLayerStatsForEDB();
 
-    // Exact cell mappings confirmed from blank template inspection
-    // Each layer: hRow = horizontal (C=minDia, D=maxDia, E=nLacers), vRow = vertical (F=height in m)
+    // Cell mappings confirmed from blank template inspection
+    // hRow = horizontal bars (C=minDia, D=maxDia, E=nLacers)
+    // vRow = vertical bars  (C=vDiaMin, D=vDiaMax, F=height in m)
     const layerRows = type === 'ubars'
         ? { F1A:{h:20,v:21}, F3A:{h:22,v:23}, F5A:{h:24,v:25},
             N1A:{h:26,v:27}, N3A:{h:28,v:29}, N5A:{h:30,v:31} }
@@ -887,7 +891,7 @@ async function exportEDB(type) {
 
     const udlCell  = type === 'ubars' ? 'C33' : 'C37';
     const wallCell = type === 'ubars' ? 'C35' : 'C39';
-    // Note: C39 in ubars and G35/G39 are formulas — do NOT overwrite them
+    // Note: C39 in ubars and G35/G39 are formula cells — do NOT overwrite them
 
     const btnId = type === 'ubars' ? 'export-ubars-btn' : 'export-struts-btn';
     const btn   = document.getElementById(btnId);
@@ -898,32 +902,44 @@ async function exportEDB(type) {
         const resp = await fetch(`templates/edb-${type}.xlsm`);
         if (!resp.ok) throw new Error(`Template file not found: edb-${type}.xlsm`);
         const buf = await resp.arrayBuffer();
-        const wb  = XLSX.read(new Uint8Array(buf), { type: 'array' });
-        const ws  = wb.Sheets[wb.SheetNames.find(n => n === 'Span Lookup') || wb.SheetNames[0]];
 
-        function setNum(ref, val) {
+        // xlsx-populate reads the template preserving all styles, borders, colours, formulas
+        const wb = await XlsxPopulate.fromDataAsync(buf);
+        const ws = wb.sheet('Span Lookup') || wb.sheet(0);
+
+        function setVal(ref, val) {
             if (val == null) return;
-            if (!ws[ref]) ws[ref] = {};
-            ws[ref].t = 'n'; ws[ref].v = val; delete ws[ref].f;
+            ws.cell(ref).value(val);
         }
 
         // Global inputs
-        setNum(udlCell,  udl);
-        setNum(wallCell, wallM);
+        setVal(udlCell,  udl);
+        setVal(wallCell, wallM);
 
         // Per-layer data
         for (const [layer, rows] of Object.entries(layerRows)) {
             const s = layerStats[layer];
             if (!s) continue;
-            setNum(`C${rows.h}`, s.hDiaMin);
-            setNum(`D${rows.h}`, s.hDiaMax);
-            setNum(`E${rows.h}`, s.nLacers);
-            if (s.vHeightMax != null) setNum(`F${rows.v}`, +(s.vHeightMax / 1000).toFixed(3));
+            // Horizontal row: min dia, max dia, lacer count
+            if (s.hDiaMin  != null) setVal(`C${rows.h}`, s.hDiaMin);
+            if (s.hDiaMax  != null) setVal(`D${rows.h}`, s.hDiaMax);
+            if (s.nLacers  != null) setVal(`E${rows.h}`, s.nLacers);
+            // Vertical row: min dia, max dia, max height (m)
+            if (s.vDiaMin  != null) setVal(`C${rows.v}`, s.vDiaMin);
+            if (s.vDiaMax  != null) setVal(`D${rows.v}`, s.vDiaMax);
+            if (s.vHeightMax != null) setVal(`F${rows.v}`, +(s.vHeightMax / 1000).toFixed(3));
         }
 
         const cageRef = (document.getElementById('ifc-filename').textContent || 'cage')
             .replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 40);
-        XLSX.writeFile(wb, `${cageRef}-EDB-${type}.xlsx`);
+
+        const outBuf = await wb.outputAsync();
+        const blob = new Blob([outBuf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+        const url  = URL.createObjectURL(blob);
+        const a    = document.createElement('a');
+        a.href = url; a.download = `${cageRef}-EDB-${type}.xlsx`;
+        document.body.appendChild(a); a.click();
+        document.body.removeChild(a); URL.revokeObjectURL(url);
     } catch (e) {
         alert(`EDB generation failed: ${e.message}`);
     } finally {
