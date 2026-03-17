@@ -73,6 +73,32 @@ section h2{color:#667eea;margin-bottom:25px;font-size:2rem;border-bottom:3px sol
     color:rgba(255,255,255,.75);font-size:.85rem;font-style:italic;
 }
 
+/* ── WARNING BANNER ────────────────────────────────────────────────── */
+.warning-banner{
+    border-radius:14px;padding:0;margin-bottom:32px;
+    background:linear-gradient(135deg,#f6ad55,#dd6b20);
+    box-shadow:0 6px 30px rgba(221,107,32,.30);
+    overflow:hidden;
+}
+.warning-header{
+    display:flex;align-items:center;gap:14px;flex-wrap:wrap;
+    padding:20px 28px;
+}
+.warning-icon{font-size:2.4rem;line-height:1;flex-shrink:0;}
+.warning-title{
+    font-size:1.8rem;font-weight:900;letter-spacing:.06em;
+    color:white;text-shadow:1px 1px 4px rgba(0,0,0,.3);
+}
+.warning-subtitle{color:rgba(255,255,255,.9);font-size:.95rem;flex:1;min-width:200px;}
+
+/* ── C01 WARN CARD ─────────────────────────────────────────────────── */
+.c01-card--warn {
+    background: #fffbeb;
+    border-color: #f6ad55;
+}
+.c01-card--warn .c01-card-count { color: #c05621; }
+.c01-card--warn .c01-card-link  { background: #dd6b20; }
+
 /* Cage axis banner */
 .cage-axis-banner{
     display:flex;align-items:center;gap:12px;flex-wrap:wrap;
