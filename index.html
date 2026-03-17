@@ -23,6 +23,20 @@
         .pin-error{color:#e53e3e;font-size:.9rem;min-height:20px;margin-bottom:16px;}
         @keyframes pin-shake{0%,100%{transform:translateX(0)}20%,60%{transform:translateX(-8px)}40%,80%{transform:translateX(8px)}}
         .pin-digits.shake{animation:pin-shake .4s ease;}
+
+        /* ── EDB EXCEL SECTION ───────────────────────────────────────── */
+        .edb-section{margin-top:28px;padding-top:24px;border-top:2px solid #e9ecef;}
+        .edb-section h4{color:#667eea;font-size:1.1rem;margin-bottom:6px;}
+        .edb-note{color:#666;font-size:.85rem;margin-bottom:16px;}
+        .edb-inputs{display:flex;gap:20px;flex-wrap:wrap;margin-bottom:16px;}
+        .edb-inputs label{display:flex;flex-direction:column;gap:5px;font-size:.85rem;font-weight:600;color:#444;}
+        .edb-inputs input{padding:8px 12px;border:2px solid #d1d5db;border-radius:8px;font-size:.95rem;width:180px;
+            transition:border-color .2s;}
+        .edb-inputs input:focus{outline:none;border-color:#667eea;}
+        .btn-edb{background:white;color:#764ba2;border:2px solid #764ba2 !important;margin:6px 8px 0 0 !important;}
+        .btn-edb:hover{background:#764ba2 !important;color:white !important;}
+        .edb-computed{font-size:.8rem;color:#888;margin-top:6px;}
+        .edb-computed span{font-weight:700;color:#667eea;}
     </style>
 </head>
 <body>
@@ -372,8 +386,25 @@
             <div class="export-section">
                 <h3>Export Results</h3>
                 <p class="export-note">CSV includes layer, coordinates, cage axis, stagger cluster IDs</p>
-                <button id="export-excel-btn" class="btn-secondary">📊 Export to Excel/CSV</button>
+                <button id="export-excel-btn" class="btn-secondary">📊 Bar Schedule Excel</button>
                 <button id="export-csv-btn"   class="btn-secondary">📄 Download CSV</button>
+
+                <!-- EDB Design Sheet Downloads -->
+                <div class="edb-section">
+                    <h4>EDB Design Sheets</h4>
+                    <p class="edb-note">Populates U-bar and Strut EDB templates from cage IFC data. Wall thickness and lifting span are required design inputs.</p>
+                    <div class="edb-inputs">
+                        <label>Wall Thickness (mm)
+                            <input type="number" id="edb-wall-thickness" placeholder="e.g. 1200" min="100" max="3000" step="50">
+                        </label>
+                        <label>Structural Span (m)
+                            <input type="number" id="edb-structural-span" placeholder="e.g. 1.8" min="0.1" max="10" step="0.1">
+                        </label>
+                    </div>
+                    <div class="edb-computed" id="edb-computed-info"></div>
+                    <button id="export-ubars-btn"  class="btn-secondary btn-edb" disabled>📥 Download U-bars EDB</button>
+                    <button id="export-struts-btn" class="btn-secondary btn-edb" disabled>📥 Download Struts EDB</button>
+                </div>
             </div>
         </section>
 
