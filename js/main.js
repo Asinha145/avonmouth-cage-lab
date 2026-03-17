@@ -20,7 +20,9 @@ let filteredData = [];
 let cageAxis     = [0, 0, 1];
 let cageAxisName = 'Z';
 // WASM BREP dimensions — set after 3D viewer loads; takes priority over text-parser bbox
-let _wasm3DDims  = null;
+let _wasm3DDims     = null;
+// C01 rejection state — gating EDB and report exports
+let _parserRejected = false;
 
 // ── Initialise viewer on page load ─────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
@@ -63,6 +65,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('export-excel-btn').addEventListener('click', () => exportXLSX());
     document.getElementById('export-ubars-btn').addEventListener('click',  () => exportEDB('ubars'));
     document.getElementById('export-struts-btn').addEventListener('click', () => exportEDB('struts'));
+    document.getElementById('export-report-btn').addEventListener('click', () => exportCageReport());
     document.getElementById('edb-wall-thickness').addEventListener('input', updateEDBComputedInfo);
 
     document.getElementById('page-prev').addEventListener('click', () => {
@@ -281,8 +284,12 @@ function displayResults(parser) {
     document.getElementById('results-section').classList.remove('hidden');
     applyFilters();
     buildC01Cards(parser);
-    document.getElementById('export-ubars-btn').disabled  = false;
-    document.getElementById('export-struts-btn').disabled = false;
+    // Gate EDB and report exports on C01 approval
+    _parserRejected = rejected;
+    document.getElementById('export-ubars-btn').disabled  = rejected;
+    document.getElementById('export-struts-btn').disabled = rejected;
+    const reportBtn = document.getElementById('export-report-btn');
+    if (reportBtn) reportBtn.classList.toggle('hidden', rejected);
     autoFillEDBInputs();
     _renderPRLPRCResults(prlPrcResult);
 }
@@ -803,6 +810,49 @@ function exportXLSX() {
 
 // ── EDB Excel (U-bars / Struts templates) ──────────────────────────────
 
+/**
+ * Count unique active F-face Avonmouth layers (F1A, F3A, F5A, F7A…)
+ * to determine cage type: 1→single, 2→double, 3→triple, 4+→quad
+ */
+function detectCageType() {
+    const fLayers = new Set();
+    allData.forEach(b => {
+        const av = (b.Avonmouth_Layer_Set || '').toUpperCase();
+        if (/^F\d+A$/.test(av)) fLayers.add(av);
+    });
+    const n = fLayers.size;
+    if (n <= 1) return 'single';
+    if (n === 2) return 'double';
+    if (n === 3) return 'triple';
+    return 'quad';
+}
+
+// Bracing bar lookup tables — sourced from edb-ubars.xlsm / edb-struts.xlsm Span Lookup sheet
+// Key = wall thickness in metres. Value = [D, E, F, G] bar diameters (mm).
+// Fill into D35:G35 (ubars) / D39:G39 (struts).
+const _EDB_BRACING = {
+    ubars: {
+        single: { 0.5: [12,12,12,6], 0.8: [12,12,16,6], 1.1: [16,12,20,6], 1.5: [20,16,25,6], 2.6: [32,20,32,6] },
+        double: {                     0.8: [12,12,12,6], 1.1: [12,12,16,6], 1.5: [16,16,25,6], 2.6: [32,20,32,6] },
+        triple: {                     0.8: [12,12,12,6], 1.1: [12,12,16,6], 1.5: [16,12,20,6], 2.6: [32,20,32,6] },
+        quad:   {                     0.8: [12,12,12,6], 1.1: [12,12,16,6], 1.5: [16,12,20,6], 2.6: [32,20,32,6] },
+    },
+    struts: {
+        single: { 0.5: [25,25,25,6], 0.8: [25,25,25,6], 1.1: [25,25,25,6], 1.5: [25,25,32,6], 2.6: [40,32,40,4] },
+        double: {                     0.8: [25,25,25,6], 1.1: [25,25,25,6], 1.5: [25,25,32,6], 2.6: [40,32,40,3] },
+        triple: {                     0.8: [25,25,25,6], 1.1: [25,25,25,6], 1.5: [25,25,32,6], 2.6: [40,32,40,3] },
+        quad:   {                     0.8: [25,25,25,6], 1.1: [25,25,25,6], 1.5: [25,25,25,6], 2.6: [32,32,40,4] },
+    },
+};
+
+function _lookupBracingBars(type, cageType, wallM) {
+    const table = (_EDB_BRACING[type] || {})[cageType];
+    if (!table) return null;
+    const keys = Object.keys(table).map(Number).sort((a, b) => a - b);
+    const key  = keys.find(k => k >= wallM) ?? keys[keys.length - 1];
+    return table[key] || null;
+}
+
 function computeLayerStatsForEDB() {
     const layerBars = {};
     allData.forEach(b => {
@@ -886,6 +936,7 @@ function updateEDBComputedInfo() {
 
 async function exportEDB(type) {
     if (!allData.length) { alert('No data to export.'); return; }
+    if (_parserRejected) { alert('C01 rejected — EDB cannot be exported for a rejected cage. Resolve all C01 issues first.'); return; }
     if (typeof XlsxPopulate === 'undefined') { alert('Excel library not loaded.'); return; }
 
     const wallM  = parseFloat(document.getElementById('edb-wall-thickness').value);
@@ -950,6 +1001,17 @@ async function exportEDB(type) {
             if (s.vHeightMax != null) setVal(`F${rows.v}`, +(s.vHeightMax / 1000).toFixed(3));
         }
 
+        // Bracing bar sizes (D35:G35 for ubars, D39:G39 for struts)
+        const cageType   = detectCageType();
+        const bracingRow = type === 'ubars' ? 35 : 39;
+        const bracing    = _lookupBracingBars(type, cageType, wallM);
+        if (bracing) {
+            setVal(`D${bracingRow}`, bracing[0]);
+            setVal(`E${bracingRow}`, bracing[1]);
+            setVal(`F${bracingRow}`, bracing[2]);
+            setVal(`G${bracingRow}`, bracing[3]);
+        }
+
         const cageRef = (document.getElementById('ifc-filename').textContent || 'cage')
             .replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 40);
 
@@ -962,6 +1024,191 @@ async function exportEDB(type) {
         document.body.removeChild(a); URL.revokeObjectURL(url);
     } catch (e) {
         alert(`EDB generation failed: ${e.message}`);
+    } finally {
+        btn.textContent = orig; btn.disabled = false;
+    }
+}
+
+// ── Cage Review Report (C01 approved only) ────────────────────────────
+
+async function exportCageReport() {
+    if (!allData.length) { alert('No data loaded.'); return; }
+    if (_parserRejected) { alert('C01 rejected — report can only be generated for approved cages.'); return; }
+    if (typeof ExcelJS === 'undefined') { alert('ExcelJS library not loaded.'); return; }
+
+    const btn  = document.getElementById('export-report-btn');
+    const orig = btn.textContent;
+    btn.textContent = '⏳ Generating…'; btn.disabled = true;
+
+    try {
+        // Capture 3D screenshots before anything else changes the view
+        let frontImg = null, sideImg = null;
+        if (window._viewer3d) {
+            const views = await window._viewer3d.captureViews();
+            frontImg = views.front;
+            sideImg  = views.side;
+        }
+
+        const cageRef  = (document.getElementById('ifc-filename').textContent || 'cage')
+            .replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 40);
+        const widthMm  = getCageWidthMm();
+        const lengthMm = getCageLengthMm();
+        const heightMm = _wasm3DDims ? _wasm3DDims.height : null;
+        const cageType = detectCageType();
+        const wallM    = parseFloat(document.getElementById('edb-wall-thickness').value) || null;
+        const totalKg  = allData.reduce((s, b) => s + (b.Weight || 0), 0);
+
+        const uBracing = wallM ? _lookupBracingBars('ubars',  cageType, wallM) : null;
+        const stBracing= wallM ? _lookupBracingBars('struts', cageType, wallM) : null;
+
+        const hasLinks     = allData.some(b => b.Bar_Type === 'Link Bar');
+        const hasPreloaded = allData.some(b => b.Bar_Type === 'Preload Bar');
+        const hasCoupled   = allData.some(b => (b.ATK_Layer_Name || '').toUpperCase().includes('CPLR'));
+
+        const wb = new ExcelJS.Workbook();
+        wb.creator = 'Avonmouth DE Tool';
+        wb.created = new Date();
+
+        const ws = wb.addWorksheet('Cage Sheet');
+        ws.pageSetup.paperSize = 9; // A4
+        ws.pageSetup.orientation = 'landscape';
+        ws.pageSetup.fitToPage = true;
+        ws.pageSetup.fitToWidth = 1;
+
+        ws.getColumn(1).width = 30;
+        ws.getColumn(2).width = 35;
+        ws.getColumn(3).width = 20;
+        ws.getColumn(4).width = 20;
+        ws.getColumn(5).width = 20;
+
+        const DARK  = { argb: 'FF2D3748' };
+        const WHITE = { argb: 'FFFFFFFF' };
+        const GREY  = { argb: 'FFF7FAFC' };
+        const BORDER = { style: 'thin', color: { argb: 'FFE2E8F0' } };
+        const thinBorder = { top: BORDER, left: BORDER, bottom: BORDER, right: BORDER };
+
+        function addSectionHeader(text) {
+            const r = ws.addRow([text]);
+            r.height = 22;
+            const c = r.getCell(1);
+            c.font  = { bold: true, size: 11, color: WHITE };
+            c.fill  = { type: 'pattern', pattern: 'solid', fgColor: DARK };
+            c.alignment = { vertical: 'middle', indent: 1 };
+            ws.mergeCells(r.number, 1, r.number, 5);
+        }
+
+        function addDataRow(label, value) {
+            const r = ws.addRow([label, value != null ? value : '—']);
+            r.getCell(1).font   = { bold: true, size: 10, color: { argb: 'FF4A5568' } };
+            r.getCell(1).fill   = { type: 'pattern', pattern: 'solid', fgColor: GREY };
+            r.getCell(1).border = thinBorder;
+            r.getCell(1).alignment = { vertical: 'middle', indent: 1 };
+            r.getCell(2).font   = { size: 10 };
+            r.getCell(2).border = thinBorder;
+            r.getCell(2).alignment = { vertical: 'middle' };
+            ws.mergeCells(r.number, 2, r.number, 5);
+        }
+
+        // ── Title ──
+        const title = ws.addRow(['CAGE SEQUENCING REVIEW']);
+        title.height = 34;
+        title.getCell(1).font = { bold: true, size: 16, color: DARK };
+        title.getCell(1).alignment = { horizontal: 'center', vertical: 'middle' };
+        ws.mergeCells(1, 1, 1, 5);
+
+        const dateLine = ws.addRow([`Generated: ${new Date().toLocaleDateString('en-GB')}  ·  Avonmouth DE Tool`]);
+        dateLine.getCell(1).font = { size: 9, color: { argb: 'FF718096' } };
+        dateLine.getCell(1).alignment = { horizontal: 'center' };
+        ws.mergeCells(2, 1, 2, 5);
+
+        ws.addRow([]); // spacer
+
+        // ── Cage Details ──
+        addSectionHeader('Cage Details');
+        addDataRow('Cage Reference', cageRef);
+        addDataRow('Cage Type', cageType.charAt(0).toUpperCase() + cageType.slice(1) + ' Mesh');
+        addDataRow('Width', widthMm  != null ? `${Math.round(widthMm).toLocaleString()} mm`  : null);
+        addDataRow('Length',lengthMm != null ? `${Math.round(lengthMm).toLocaleString()} mm` : null);
+        addDataRow('Height',heightMm != null ? `${Math.round(heightMm).toLocaleString()} mm` : null);
+        addDataRow('Total Weight', totalKg > 0 ? `${(totalKg / 1000).toFixed(2)} t` : null);
+        addDataRow('Wall Thickness', wallM ? `${wallM} m` : null);
+
+        ws.addRow([]);
+
+        // ── TW Bar Sizes ──
+        addSectionHeader('TW Bar Sizes');
+        // U-bars bracing
+        if (uBracing) {
+            addDataRow('U Strut (D)', `${uBracing[0]} mm`);
+            addDataRow('U Strut (E)', `${uBracing[1]} mm`);
+            addDataRow('U Strut (F)', `${uBracing[2]} mm`);
+            addDataRow('U Strut (G)', `${uBracing[3]} mm`);
+        }
+        // Struts bracing
+        if (stBracing) {
+            addDataRow('Vert Z Strut (D)', `${stBracing[0]} mm`);
+            addDataRow('Plan Z Strut (E)', `${stBracing[1]} mm`);
+            addDataRow('Plan Z Strut (F)', `${stBracing[2]} mm`);
+            addDataRow('Nominal Strut (G)',`${stBracing[3]} mm`);
+        }
+
+        ws.addRow([]);
+
+        // ── Cage Features ──
+        addSectionHeader('Cage Features');
+        addDataRow('Shear Links',    hasLinks     ? 'Yes' : 'No');
+        addDataRow('Preloaded Bars', hasPreloaded ? 'Yes' : 'No');
+        addDataRow('Coupled Bars',   hasCoupled   ? 'Yes' : 'No');
+
+        // ── 3D Views ──
+        if (frontImg || sideImg) {
+            ws.addRow([]);
+            addSectionHeader('3D Views');
+
+            let imgRowStart = ws.lastRow.number + 1;
+            const IMG_H = 200; // px height for image placeholder rows (approx 15 rows)
+            const IMG_W = 480;
+            const ROW_RESERVE = 15;
+
+            if (frontImg) {
+                ws.addRow(['Front View']);
+                ws.lastRow.getCell(1).font = { bold: true, size: 9, color: { argb: 'FF718096' } };
+                for (let i = 1; i < ROW_RESERVE; i++) ws.addRow([]);
+                const base64 = frontImg.replace(/^data:image\/png;base64,/, '');
+                const imgId  = wb.addImage({ base64, extension: 'png' });
+                ws.addImage(imgId, {
+                    tl: { col: 0, row: imgRowStart - 1 },
+                    ext: { width: IMG_W, height: IMG_H },
+                    editAs: 'oneCell',
+                });
+                imgRowStart = ws.lastRow.number + 2;
+            }
+
+            if (sideImg) {
+                ws.addRow(['Side View']);
+                ws.lastRow.getCell(1).font = { bold: true, size: 9, color: { argb: 'FF718096' } };
+                for (let i = 1; i < ROW_RESERVE; i++) ws.addRow([]);
+                const base64 = sideImg.replace(/^data:image\/png;base64,/, '');
+                const imgId  = wb.addImage({ base64, extension: 'png' });
+                ws.addImage(imgId, {
+                    tl: { col: 0, row: imgRowStart - 1 },
+                    ext: { width: IMG_W, height: IMG_H },
+                    editAs: 'oneCell',
+                });
+            }
+        }
+
+        const buf  = await wb.xlsx.writeBuffer();
+        const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+        const url  = URL.createObjectURL(blob);
+        const a    = document.createElement('a');
+        a.href = url; a.download = `${cageRef}-CageReview.xlsx`;
+        document.body.appendChild(a); a.click();
+        document.body.removeChild(a); URL.revokeObjectURL(url);
+
+    } catch (e) {
+        console.error('[exportCageReport]', e);
+        alert(`Report generation failed: ${e.message}`);
     } finally {
         btn.textContent = orig; btn.disabled = false;
     }

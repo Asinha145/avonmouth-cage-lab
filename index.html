@@ -446,6 +446,7 @@
                     <div class="edb-computed" id="edb-computed-info"></div>
                     <button id="export-ubars-btn"  class="btn-secondary btn-edb" disabled>📥 Download U-bars EDB</button>
                     <button id="export-struts-btn" class="btn-secondary btn-edb" disabled>📥 Download Struts EDB</button>
+                    <button id="export-report-btn" class="btn-secondary btn-edb hidden">📋 Export C01 Report</button>
                 </div>
             </div>
         </section>
@@ -491,6 +492,8 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <!-- xlsx-populate for EDB template export (preserves styles, borders, colours) -->
 <script src="https://cdn.jsdelivr.net/npm/xlsx-populate@1.21.0/browser/xlsx-populate.min.js"></script>
+<!-- ExcelJS for Cage Review Report (supports image embedding) -->
+<script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
 <!-- web-ifc WASM (browser IIFE bundle) -->
 <script src="lib/web-ifc-api-iife.js"></script>
 <!-- App scripts -->
