@@ -19,6 +19,8 @@ let allData      = [];
 let filteredData = [];
 let cageAxis     = [0, 0, 1];
 let cageAxisName = 'Z';
+// WASM BREP dimensions — set after 3D viewer loads; takes priority over text-parser bbox
+let _wasm3DDims  = null;
 
 // ── Initialise viewer on page load ─────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
@@ -133,7 +135,7 @@ async function processFile() {
     const file = document.getElementById('ifc-file').files[0] || window._droppedFile || null;
     window._droppedFile = null;
     if (!file) { alert('Please select an IFC file.'); return; }
-    showProgress(); allData = [];
+    showProgress(); allData = []; _wasm3DDims = null;
     _resetClashStep();
 
     try {
@@ -349,10 +351,14 @@ function displayCageDimensionBoxes() {
  */
 function _updateDimBoxesFromBREP(dims) {
     if (!dims) return;
+    // Store for use by getCageWidthMm / getCageLengthMm (WASM is more accurate than text parser)
+    _wasm3DDims = dims;
     const fmt = v => v !== null && isFinite(v) ? Math.round(v).toLocaleString() + ' mm' : '—';
     document.getElementById('dim-width').textContent  = fmt(dims.width);
     document.getElementById('dim-length').textContent = fmt(dims.length);
     document.getElementById('dim-height').textContent = fmt(dims.height);
+    // Re-run EDB auto-fill now that accurate WASM dims are available
+    autoFillEDBInputs();
 }
 
 // ── Viewer placeholder text ────────────────────────────────────────────
@@ -825,12 +831,8 @@ function computeLayerStatsForEDB() {
 }
 
 function _cageXYSpans() {
-    // Use only mesh bars — non-mesh bars (PRC preload, lacers, links, stirrups)
-    // extend outside the cage envelope and inflate the bounding box.
-    const src = allData.filter(b => b.Bar_Type === 'Mesh');
-    if (!src.length) return null;
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-    src.forEach(b => {
+    allData.forEach(b => {
         if (b.Start_X == null) return;
         const r = (b.Size || 0) / 2;
         minX = Math.min(minX, b.Start_X - r, b.End_X - r);
@@ -843,10 +845,12 @@ function _cageXYSpans() {
 }
 
 function getCageLengthMm() {
+    if (_wasm3DDims) return _wasm3DDims.length;
     const s = _cageXYSpans(); return s ? Math.max(s.spanX, s.spanY) : null;
 }
 
 function getCageWidthMm() {
+    if (_wasm3DDims) return _wasm3DDims.width;
     const s = _cageXYSpans(); return s ? Math.min(s.spanX, s.spanY) : null;
 }
 
