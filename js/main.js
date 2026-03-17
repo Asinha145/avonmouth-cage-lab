@@ -364,11 +364,14 @@ function _buildViewerCheckboxes() {
     _viewerChecked = new Set(layers);
 
     layers.forEach(key => {
-        const colour = window._viewer3d._barColour(
-            allData.find(b => (b.Avonmouth_Layer_Set || b.Bar_Type || 'Unknown') === key) || null
-        );
+        const sampleBar = key === 'PRL/PRC Mismatch'
+            ? { _prlPrcMismatch: true }
+            : allData.find(b => !b._prlPrcMismatch && (b.Avonmouth_Layer_Set || b.Bar_Type || 'Unknown') === key) || null;
+        const colour = window._viewer3d._barColour(sampleBar);
         const hex   = (colour >>> 0).toString(16).padStart(6, '0');
-        const count = allData.filter(b => (b.Avonmouth_Layer_Set || b.Bar_Type || 'Unknown') === key).length;
+        const count = key === 'PRL/PRC Mismatch'
+            ? allData.filter(b => b._prlPrcMismatch).length
+            : allData.filter(b => !b._prlPrcMismatch && (b.Avonmouth_Layer_Set || b.Bar_Type || 'Unknown') === key).length;
         const label = document.createElement('label');
         label.className = 'viewer-cb-label';
         label.innerHTML = `
@@ -408,11 +411,14 @@ function _buildViewerLegend(layers) {
     if (!legend || !window._viewer3d) return;
     legend.innerHTML = '';
     layers.filter(k => _viewerChecked.has(k)).forEach(key => {
-        const colour = window._viewer3d._barColour(
-            allData.find(b => (b.Avonmouth_Layer_Set || b.Bar_Type || 'Unknown') === key) || null
-        );
+        const sampleBar = key === 'PRL/PRC Mismatch'
+            ? { _prlPrcMismatch: true }
+            : allData.find(b => !b._prlPrcMismatch && (b.Avonmouth_Layer_Set || b.Bar_Type || 'Unknown') === key) || null;
+        const colour = window._viewer3d._barColour(sampleBar);
         const hex   = (colour >>> 0).toString(16).padStart(6, '0').slice(-6);
-        const count = allData.filter(b => (b.Avonmouth_Layer_Set || b.Bar_Type || 'Unknown') === key).length;
+        const count = key === 'PRL/PRC Mismatch'
+            ? allData.filter(b => b._prlPrcMismatch).length
+            : allData.filter(b => !b._prlPrcMismatch && (b.Avonmouth_Layer_Set || b.Bar_Type || 'Unknown') === key).length;
         const item  = document.createElement('div');
         item.className = 'legend-item';
         item.innerHTML = `<span class="legend-dot" style="background:#${hex}"></span>${key} (${count})`;
@@ -1126,9 +1132,12 @@ function _computePRLPRCMismatches() {
         const geoLabel = inside ? 'PRL' : 'PRC';
         const match    = (isPRL && inside) || (isPRC && !inside);
 
-        if (match) { isPRL ? prlCorrect++ : prcCorrect++; }
-        else {
+        if (match) {
+            isPRL ? prlCorrect++ : prcCorrect++;
+            b._prlPrcMismatch = false; // ensure flag is clear on correct bars
+        } else {
             isPRL ? prlMismatch++ : prcMismatch++;
+            b._prlPrcMismatch = true;  // tag for 3D viewer highlight
             mismatches.push({ bar: b, labeled: isPRL ? 'PRL' : 'PRC', geo: geoLabel });
         }
     });
