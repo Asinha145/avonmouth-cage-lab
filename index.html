@@ -339,9 +339,35 @@
                     <div class="table-wrapper" id="step-table-wrap" style="display:none">
                         <table class="layer-weight-table">
                             <thead>
-                                <tr><th>#</th><th>Grid X (mm)</th><th>Grid Y (mm)</th><th>Bar Count</th><th>Layers</th><th>Min Top Z (mm)</th><th>Max Top Z (mm)</th><th>Step (mm)</th></tr>
+                                <tr><th>#</th><th>Grid X (mm)</th><th>Grid Y (mm)</th><th>Unique Marks</th><th>Layers</th><th>Min Top Z (mm)</th><th>Max Top Z (mm)</th><th>Step (mm)</th></tr>
                             </thead>
                             <tbody id="step-tbody"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ── BLOCK 5: PRL / PRC Classification ─────────────────────── -->
+            <div class="analysis-block" id="prl-prc-block">
+                <div class="analysis-block-header">
+                    <span class="block-icon">🔩</span>
+                    <div>
+                        <h3>Preload Bar Classification (PRL vs PRC)</h3>
+                        <p class="block-desc">
+                            PRL = bar intersects or overlaps the mesh cage volume (inside).
+                            PRC = bar is completely outside the mesh cage volume.
+                            Checks that Avonmouth IFC labels match actual geometry.
+                        </p>
+                    </div>
+                </div>
+                <div id="prl-prc-results" class="analysis-subblock hidden">
+                    <div id="prl-prc-summary" class="clash-summary"></div>
+                    <div class="table-wrapper" id="prl-prc-table-wrap" style="display:none">
+                        <table class="layer-weight-table">
+                            <thead>
+                                <tr><th>Rebar Mark</th><th>Labeled</th><th>Geometry</th><th>Status</th><th>Layer</th><th>Size</th></tr>
+                            </thead>
+                            <tbody id="prl-prc-tbody"></tbody>
                         </table>
                     </div>
                 </div>

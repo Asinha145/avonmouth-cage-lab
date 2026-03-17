@@ -265,6 +265,7 @@ function displayResults(parser) {
     document.getElementById('export-ubars-btn').disabled  = false;
     document.getElementById('export-struts-btn').disabled = false;
     autoFillEDBInputs();
+    _runPRLPRCCheck();
 }
 
 // ── Cage dimension boxes (parser centreline, updated by BREP after viewer loads) ──
@@ -1003,14 +1004,15 @@ function runStepDetection() {
 
 function _doStepDetection() {
     const GRID     = 50;
-    const STEP_THR = 15;
-    const STEP_MAX = 300;
+    const STEP_THR = 3;    // minimum step height to report (mm)
+    const STEP_MAX = 200;  // ignore deliberate level changes above this (mm)
 
     const vertBars = allData.filter(b =>
         b.Bar_Type === 'Mesh' && b.Start_Z !== null && b.Dir_Z !== null && Math.abs(b.Dir_Z) >= 0.5
     );
     if (!vertBars.length) { _renderStepResults([], 'No vertical bars found.'); _setBox5Step(false); return; }
 
+    // Group by XY grid cell
     const cells = new Map();
     vertBars.forEach(b => {
         const gx = Math.round(b.Start_X / GRID) * GRID;
@@ -1022,19 +1024,134 @@ function _doStepDetection() {
 
     const steps = [];
     cells.forEach(({ gx, gy, bars }) => {
-        if (bars.length < 2) return;
-        const tops   = bars.map(b => Math.max(b.Start_Z, b.End_Z));
-        const minTop = Math.min(...tops);
-        const maxTop = Math.max(...tops);
-        const stepH  = maxTop - minTop;
+        // De-duplicate by Rebar_Mark — same mark = same bar type, won't have different originating plane
+        // Take the maximum top Z per unique rebar mark
+        const markMap = new Map();
+        bars.forEach(b => {
+            const mark = b.Rebar_Mark || b.Full_Rebar_Mark || b.GlobalId;
+            const top  = Math.max(b.Start_Z, b.End_Z);
+            const prev = markMap.get(mark);
+            if (!prev || top > prev.top)
+                markMap.set(mark, { top, layer: b.Avonmouth_Layer_Set || b.ATK_Layer_Name || '?' });
+        });
+        if (markMap.size < 2) return;
+
+        const entries = [...markMap.values()];
+        const tops    = entries.map(e => e.top);
+        const minTop  = Math.min(...tops);
+        const maxTop  = Math.max(...tops);
+        const stepH   = maxTop - minTop;
         if (stepH < STEP_THR || stepH > STEP_MAX) return;
-        const layers = [...new Set(bars.map(b => b.Avonmouth_Layer_Set || b.ATK_Layer_Name || '?'))].sort().join(', ');
-        steps.push({ gx, gy, barCount: bars.length, minTop, maxTop, stepH, layers });
+
+        const layers = [...new Set(entries.map(e => e.layer))].sort().join(', ');
+        steps.push({ gx, gy, markCount: markMap.size, minTop, maxTop, stepH, layers });
     });
 
     steps.sort((a, b) => b.stepH - a.stepH);
     _renderStepResults(steps, null);
     _setBox5Step(steps.length > 0);
+}
+
+// ── PRL / PRC geometry check ───────────────────────────────────────────
+
+function _computeMeshBoundingBox() {
+    let minX = Infinity, maxX = -Infinity;
+    let minY = Infinity, maxY = -Infinity;
+    let minZ = Infinity, maxZ = -Infinity;
+    allData.forEach(b => {
+        if (b.Bar_Type !== 'Mesh' || b.Start_X == null) return;
+        const r = (b.Size || 0) / 2;
+        minX = Math.min(minX, b.Start_X - r, b.End_X - r);
+        maxX = Math.max(maxX, b.Start_X + r, b.End_X + r);
+        minY = Math.min(minY, b.Start_Y - r, b.End_Y - r);
+        maxY = Math.max(maxY, b.Start_Y + r, b.End_Y + r);
+        minZ = Math.min(minZ, b.Start_Z - r, b.End_Z - r);
+        maxZ = Math.max(maxZ, b.Start_Z + r, b.End_Z + r);
+    });
+    return isFinite(minX) ? { minX, maxX, minY, maxY, minZ, maxZ } : null;
+}
+
+function _barIntersectsMeshBox(bar, box) {
+    // AABB overlap test — bar's axis-aligned bounding box vs mesh bounding box
+    const bMinX = Math.min(bar.Start_X, bar.End_X);
+    const bMaxX = Math.max(bar.Start_X, bar.End_X);
+    const bMinY = Math.min(bar.Start_Y, bar.End_Y);
+    const bMaxY = Math.max(bar.Start_Y, bar.End_Y);
+    const bMinZ = Math.min(bar.Start_Z, bar.End_Z);
+    const bMaxZ = Math.max(bar.Start_Z, bar.End_Z);
+    return bMaxX >= box.minX && bMinX <= box.maxX
+        && bMaxY >= box.minY && bMinY <= box.maxY
+        && bMaxZ >= box.minZ && bMinZ <= box.maxZ;
+}
+
+function _runPRLPRCCheck() {
+    const resultsDiv = document.getElementById('prl-prc-results');
+    const summaryDiv = document.getElementById('prl-prc-summary');
+    const tableWrap  = document.getElementById('prl-prc-table-wrap');
+    const tbody      = document.getElementById('prl-prc-tbody');
+    if (!resultsDiv) return;
+
+    const preloadBars = allData.filter(b => b.Bar_Type === 'Preload Bar' && b.Start_X != null);
+    if (!preloadBars.length) {
+        resultsDiv.classList.remove('hidden');
+        summaryDiv.innerHTML = '<div class="clash-ok">ℹ️ No preload bars (PRL/PRC) found in this cage.</div>';
+        tableWrap.style.display = 'none';
+        return;
+    }
+
+    const box = _computeMeshBoundingBox();
+    if (!box) {
+        resultsDiv.classList.remove('hidden');
+        summaryDiv.innerHTML = '<div class="clash-ok">ℹ️ Cannot compute mesh bounding box — no mesh bars found.</div>';
+        tableWrap.style.display = 'none';
+        return;
+    }
+
+    let prlCorrect = 0, prlMismatch = 0, prcCorrect = 0, prcMismatch = 0;
+    const mismatches = [];
+
+    preloadBars.forEach(b => {
+        const labeled  = (b.Avonmouth_Layer_Set || '').toUpperCase();
+        const isPRL    = labeled.startsWith('PRL');
+        const isPRC    = labeled.startsWith('PRC');
+        if (!isPRL && !isPRC) return;
+
+        const inside = _barIntersectsMeshBox(b, box);
+        const geoLabel = inside ? 'PRL' : 'PRC';
+        const match    = (isPRL && inside) || (isPRC && !inside);
+
+        if (match) {
+            isPRL ? prlCorrect++ : prcCorrect++;
+        } else {
+            isPRL ? prlMismatch++ : prcMismatch++;
+            mismatches.push({ bar: b, labeled: isPRL ? 'PRL' : 'PRC', geo: geoLabel });
+        }
+    });
+
+    resultsDiv.classList.remove('hidden');
+    const total    = prlCorrect + prlMismatch + prcCorrect + prcMismatch;
+    const totalMis = prlMismatch + prcMismatch;
+
+    if (totalMis === 0) {
+        summaryDiv.innerHTML = `<div class="clash-ok">✅ All ${total} preload bar${total !== 1 ? 's' : ''} correctly classified — PRL: ${prlCorrect}, PRC: ${prcCorrect}</div>`;
+        tableWrap.style.display = 'none';
+    } else {
+        summaryDiv.innerHTML = `<div class="clash-fail">⚠️ ${totalMis} mislabelled preload bar${totalMis !== 1 ? 's' : ''} — PRL: ${prlCorrect} correct / ${prlMismatch} mismatch &nbsp;·&nbsp; PRC: ${prcCorrect} correct / ${prcMismatch} mismatch</div>`;
+        tbody.innerHTML = '';
+        mismatches.forEach(({ bar, labeled, geo }) => {
+            const tr = document.createElement('tr');
+            tr.className = 'danger-row';
+            tr.innerHTML = `
+                <td>${bar.Rebar_Mark || bar.Full_Rebar_Mark || '—'}</td>
+                <td>${labeled}</td>
+                <td>${geo}</td>
+                <td>⚠️ Mismatch</td>
+                <td>${bar.Avonmouth_Layer_Set || '—'}</td>
+                <td>${bar.Size ? bar.Size + ' mm' : '—'}</td>`;
+            tbody.appendChild(tr);
+        });
+        tableWrap.style.display = '';
+    }
 }
 
 function _setBox5Step(hasStep) {
@@ -1057,11 +1174,11 @@ function _renderStepResults(steps, errMsg) {
         return;
     }
     if (steps.length === 0) {
-        summaryDiv.innerHTML = '<div class="clash-ok">✅ No steps detected — all vertical bars at the same XY position are within 15 mm of each other.</div>';
+        summaryDiv.innerHTML = '<div class="clash-ok">✅ No steps detected — all unique bar marks at the same XY position have tops within 3 mm of each other.</div>';
         tableWrap.style.display = 'none';
         return;
     }
-    summaryDiv.innerHTML = `<div class="clash-fail">📐 ${steps.length} step location${steps.length > 1 ? 's' : ''} detected (bar tops differ by 15–300 mm)</div>`;
+    summaryDiv.innerHTML = `<div class="clash-fail">📐 ${steps.length} step location${steps.length > 1 ? 's' : ''} detected (bar tops differ by 3–200 mm between different rebar marks)</div>`;
     tbody.innerHTML = '';
     steps.forEach((s, idx) => {
         const tr = document.createElement('tr');
@@ -1069,7 +1186,7 @@ function _renderStepResults(steps, errMsg) {
             <td>${idx + 1}</td>
             <td>${Math.round(s.gx).toLocaleString()}</td>
             <td>${Math.round(s.gy).toLocaleString()}</td>
-            <td>${s.barCount}</td>
+            <td>${s.markCount}</td>
             <td>${s.layers || '—'}</td>
             <td>${Math.round(s.minTop).toLocaleString()}</td>
             <td>${Math.round(s.maxTop).toLocaleString()}</td>

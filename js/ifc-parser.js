@@ -634,7 +634,7 @@ class IFCParser {
             // (e.g. F2-CPLR → F1A) will get an Effective_Mesh_Layer here.
             // reclassifyMeshCouplers() then promotes those to Bar_Type = 'Mesh'.
             // Bars whose ATK name ends in -U or -LINK stay Unknown → C01 rejected.
-            if (av && /^[FN]\d+A$/i.test(av)) {
+            if (av && /^[FNBTfnbt]\d+A$/i.test(av)) {
                 bar.Effective_Mesh_Layer = av.toUpperCase();
                 return;
             }
@@ -777,7 +777,7 @@ class IFCParser {
         bars.forEach(bar => {
             const layer = bar.Avonmouth_Layer_Set || '';
             if (!layer)                                  bar.Bar_Type = 'Unknown';
-            else if (/^[FN]\d+A$/i.test(layer))         bar.Bar_Type = 'Mesh';
+            else if (/^[FNBTfnbt]\d+A$/i.test(layer))  bar.Bar_Type = 'Mesh'; // F/N/B/T face layers
             else if (/^LB\d*$/i.test(layer))            bar.Bar_Type = 'Loose Bar';
             else if (/^LK\d*$/i.test(layer))            bar.Bar_Type = 'Link Bar';
             else if (/^[VH]S\d*$/i.test(layer))         bar.Bar_Type = 'Strut Bar';
