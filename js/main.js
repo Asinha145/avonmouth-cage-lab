@@ -61,9 +61,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('export-excel-btn').addEventListener('click', () => exportXLSX());
     document.getElementById('export-ubars-btn').addEventListener('click',  () => exportEDB('ubars'));
     document.getElementById('export-struts-btn').addEventListener('click', () => exportEDB('struts'));
-    ['edb-wall-thickness','edb-structural-span'].forEach(id => {
-        document.getElementById(id).addEventListener('input', updateEDBComputedInfo);
-    });
+    document.getElementById('edb-wall-thickness').addEventListener('input', updateEDBComputedInfo);
 
     document.getElementById('page-prev').addEventListener('click', () => {
         if (currentPage > 1) { currentPage--; renderTable(); }
@@ -854,14 +852,13 @@ function autoFillEDBInputs() {
 
 function updateEDBComputedInfo() {
     if (!allData.length) return;
-    const spanM = parseFloat(document.getElementById('edb-structural-span').value);
+    const wallM = parseFloat(document.getElementById('edb-wall-thickness').value);
     const info  = document.getElementById('edb-computed-info');
-    if (!spanM || spanM <= 0) { info.textContent = ''; return; }
+    if (!wallM || wallM <= 0) { info.textContent = ''; return; }
     const cageLenMm = getCageLengthMm();
+    const cageWidMm = getCageWidthMm();
     if (!cageLenMm) { info.textContent = ''; return; }
-    const nLifts = Math.ceil(cageLenMm / (spanM * 1000));
-    const gValue = nLifts <= 6 ? nLifts : nLifts <= 18 ? Math.ceil(nLifts / 2) : Math.ceil(nLifts / 3);
-    info.innerHTML = `Cage length: <span>${Math.round(cageLenMm).toLocaleString()} mm</span> &nbsp;·&nbsp; Lifting points: <span>${nLifts}</span> &nbsp;·&nbsp; G-value: <span>${gValue}</span>`;
+    info.innerHTML = `Cage: <span>${Math.round(cageLenMm).toLocaleString()} mm</span> long &nbsp;·&nbsp; Wall thickness: <span>${wallM} m</span> &nbsp;·&nbsp; Span &amp; G-value auto-calculated in Excel`;
 }
 
 async function exportEDB(type) {
@@ -869,9 +866,7 @@ async function exportEDB(type) {
     if (typeof XLSX === 'undefined') { alert('Excel library not loaded.'); return; }
 
     const wallM  = parseFloat(document.getElementById('edb-wall-thickness').value);
-    const spanM  = parseFloat(document.getElementById('edb-structural-span').value);
     if (isNaN(wallM) || wallM <= 0) { alert('Wall thickness missing — analyse a cage first.'); return; }
-    if (isNaN(spanM) || spanM <= 0) { alert('Enter a valid structural span (m).'); return; }
 
     // UDL: round UP to 2 decimal places
     const meshBars     = allData.filter(b => b.Bar_Type === 'Mesh');
@@ -879,11 +874,6 @@ async function exportEDB(type) {
     const meshW        = meshBars.reduce((s, b) => s + (b.Weight || 0), 0);
     const nonMeshW     = nonMeshBars.reduce((s, b) => s + (b.Weight || 0), 0);
     const udl          = meshW > 0 ? Math.ceil((nonMeshW / meshW) * 100) / 100 : 0;
-
-    // gValue from cage length ÷ span
-    const cageLenMm = getCageLengthMm() || 0;
-    const nLifts    = Math.ceil(cageLenMm / (spanM * 1000));
-    const gValue    = nLifts <= 6 ? nLifts : nLifts <= 18 ? Math.ceil(nLifts / 2) : Math.ceil(nLifts / 3);
 
     const layerStats = computeLayerStatsForEDB();
 
@@ -897,8 +887,7 @@ async function exportEDB(type) {
 
     const udlCell  = type === 'ubars' ? 'C33' : 'C37';
     const wallCell = type === 'ubars' ? 'C35' : 'C39';
-    const gCell    = type === 'ubars' ? 'G35' : 'G39';
-    // Note: C39 in ubars is a formula (max lifting span) — do NOT overwrite it
+    // Note: C39 in ubars and G35/G39 are formulas — do NOT overwrite them
 
     const btnId = type === 'ubars' ? 'export-ubars-btn' : 'export-struts-btn';
     const btn   = document.getElementById(btnId);
@@ -921,7 +910,6 @@ async function exportEDB(type) {
         // Global inputs
         setNum(udlCell,  udl);
         setNum(wallCell, wallM);
-        setNum(gCell,    gValue);
 
         // Per-layer data
         for (const [layer, rows] of Object.entries(layerRows)) {
