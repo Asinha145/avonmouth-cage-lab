@@ -211,9 +211,14 @@ function updateProgress(pct, txt) {
 // ── Top-level display ──────────────────────────────────────────────────
 
 function displayResults(parser) {
+    // Compute PRL/PRC mismatches early so they can feed into rejection banner
+    const prlPrcResult = _computePRLPRCMismatches();
+    const preloadMisCount = prlPrcResult ? prlPrcResult.totalMis : 0;
+
     // Rejection banner
-    const banner = document.getElementById('rejection-banner');
-    if (parser.isRejected) {
+    const banner   = document.getElementById('rejection-banner');
+    const rejected = parser.isRejected || preloadMisCount > 0;
+    if (rejected) {
         const reasons = [];
         if (parser.unknownCount > 0)
             reasons.push(`${parser.unknownCount} bar${parser.unknownCount > 1 ? 's' : ''} with unknown Bar_Type`);
@@ -223,6 +228,8 @@ function displayResults(parser) {
             reasons.push(`${parser.duplicateCount} duplicate GlobalId${parser.duplicateCount > 1 ? 's' : ''}`);
         if (parser.missingWeightCount > 0)
             reasons.push(`${parser.missingWeightCount} bar${parser.missingWeightCount > 1 ? 's' : ''} missing ATK/ICOS Weight`);
+        if (preloadMisCount > 0)
+            reasons.push(`${preloadMisCount} preload bar${preloadMisCount > 1 ? 's' : ''} with PRL/PRC label mismatch`);
         document.getElementById('rejection-reasons').innerHTML =
             reasons.map(r => `<li>${r}</li>`).join('');
         banner.classList.remove('hidden');
@@ -265,7 +272,7 @@ function displayResults(parser) {
     document.getElementById('export-ubars-btn').disabled  = false;
     document.getElementById('export-struts-btn').disabled = false;
     autoFillEDBInputs();
-    _runPRLPRCCheck();
+    _renderPRLPRCResults(prlPrcResult);
 }
 
 // ── Cage dimension boxes (parser centreline, updated by BREP after viewer loads) ──
@@ -986,8 +993,22 @@ function buildC01Cards(parser) {
         weightCard.classList.remove('hidden');
     } else { weightCard.classList.add('hidden'); }
 
+    const preloadCard = document.getElementById('c01-preload-card');
+    if (preloadCard) {
+        const prlPrc = _computePRLPRCMismatches();
+        const mis    = prlPrc ? prlPrc.totalMis : 0;
+        if (mis > 0) {
+            document.getElementById('c01-preload-count').textContent = mis;
+            document.getElementById('c01-preload-link').href =
+                buildDetailPageURL('PRL/PRC Mislabelled', (prlPrc.mismatches || []).map(m => m.bar));
+            preloadCard.classList.remove('hidden');
+        } else { preloadCard.classList.add('hidden'); }
+    }
+
     const anyVisible = parser.unknownCount > 0 || parser.missingLayerCount > 0 ||
-                       parser.duplicateCount > 0 || parser.missingWeightCount > 0;
+                       parser.duplicateCount > 0 || parser.missingWeightCount > 0 ||
+                       (document.getElementById('c01-preload-card') &&
+                        !document.getElementById('c01-preload-card').classList.contains('hidden'));
     row.classList.toggle('hidden', !anyVisible);
 }
 
@@ -1084,59 +1105,60 @@ function _barIntersectsMeshBox(bar, box) {
         && bMaxZ >= box.minZ && bMinZ <= box.maxZ;
 }
 
-function _runPRLPRCCheck() {
-    const resultsDiv = document.getElementById('prl-prc-results');
-    const summaryDiv = document.getElementById('prl-prc-summary');
-    const tableWrap  = document.getElementById('prl-prc-table-wrap');
-    const tbody      = document.getElementById('prl-prc-tbody');
-    if (!resultsDiv) return;
-
+// Returns { prlCorrect, prlMismatch, prcCorrect, prcMismatch, mismatches[], total, totalMis }
+// or null if no preload bars / no mesh box
+function _computePRLPRCMismatches() {
     const preloadBars = allData.filter(b => b.Bar_Type === 'Preload Bar' && b.Start_X != null);
-    if (!preloadBars.length) {
-        resultsDiv.classList.remove('hidden');
-        summaryDiv.innerHTML = '<div class="clash-ok">ℹ️ No preload bars (PRL/PRC) found in this cage.</div>';
-        tableWrap.style.display = 'none';
-        return;
-    }
-
+    if (!preloadBars.length) return null;
     const box = _computeMeshBoundingBox();
-    if (!box) {
-        resultsDiv.classList.remove('hidden');
-        summaryDiv.innerHTML = '<div class="clash-ok">ℹ️ Cannot compute mesh bounding box — no mesh bars found.</div>';
-        tableWrap.style.display = 'none';
-        return;
-    }
+    if (!box) return null;
 
     let prlCorrect = 0, prlMismatch = 0, prcCorrect = 0, prcMismatch = 0;
     const mismatches = [];
 
     preloadBars.forEach(b => {
-        const labeled  = (b.Avonmouth_Layer_Set || '').toUpperCase();
-        const isPRL    = labeled.startsWith('PRL');
-        const isPRC    = labeled.startsWith('PRC');
+        const labeled = (b.Avonmouth_Layer_Set || '').toUpperCase();
+        const isPRL   = labeled.startsWith('PRL');
+        const isPRC   = labeled.startsWith('PRC');
         if (!isPRL && !isPRC) return;
 
-        const inside = _barIntersectsMeshBox(b, box);
+        const inside   = _barIntersectsMeshBox(b, box);
         const geoLabel = inside ? 'PRL' : 'PRC';
         const match    = (isPRL && inside) || (isPRC && !inside);
 
-        if (match) {
-            isPRL ? prlCorrect++ : prcCorrect++;
-        } else {
+        if (match) { isPRL ? prlCorrect++ : prcCorrect++; }
+        else {
             isPRL ? prlMismatch++ : prcMismatch++;
             mismatches.push({ bar: b, labeled: isPRL ? 'PRL' : 'PRC', geo: geoLabel });
         }
     });
 
-    resultsDiv.classList.remove('hidden');
     const total    = prlCorrect + prlMismatch + prcCorrect + prcMismatch;
     const totalMis = prlMismatch + prcMismatch;
+    return { prlCorrect, prlMismatch, prcCorrect, prcMismatch, mismatches, total, totalMis };
+}
+
+function _renderPRLPRCResults(result) {
+    const resultsDiv = document.getElementById('prl-prc-results');
+    const summaryDiv = document.getElementById('prl-prc-summary');
+    const tableWrap  = document.getElementById('prl-prc-table-wrap');
+    const tbody      = document.getElementById('prl-prc-tbody');
+    if (!resultsDiv) return;
+    resultsDiv.classList.remove('hidden');
+
+    if (!result) {
+        summaryDiv.innerHTML = '<div class="clash-ok">ℹ️ No preload bars (PRL/PRC) found in this cage.</div>';
+        tableWrap.style.display = 'none';
+        return;
+    }
+
+    const { prlCorrect, prlMismatch, prcCorrect, prcMismatch, mismatches, total, totalMis } = result;
 
     if (totalMis === 0) {
         summaryDiv.innerHTML = `<div class="clash-ok">✅ All ${total} preload bar${total !== 1 ? 's' : ''} correctly classified — PRL: ${prlCorrect}, PRC: ${prcCorrect}</div>`;
         tableWrap.style.display = 'none';
     } else {
-        summaryDiv.innerHTML = `<div class="clash-fail">⚠️ ${totalMis} mislabelled preload bar${totalMis !== 1 ? 's' : ''} — PRL: ${prlCorrect} correct / ${prlMismatch} mismatch &nbsp;·&nbsp; PRC: ${prcCorrect} correct / ${prcMismatch} mismatch</div>`;
+        summaryDiv.innerHTML = `<div class="clash-fail">🚫 ${totalMis} mislabelled preload bar${totalMis !== 1 ? 's' : ''} — PRL: ${prlCorrect} correct / ${prlMismatch} mismatch &nbsp;·&nbsp; PRC: ${prcCorrect} correct / ${prcMismatch} mismatch</div>`;
         tbody.innerHTML = '';
         mismatches.forEach(({ bar, labeled, geo }) => {
             const tr = document.createElement('tr');
