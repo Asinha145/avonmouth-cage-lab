@@ -60,6 +60,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('bartype-filter').addEventListener('change', applyFilters);
     document.getElementById('export-excel-btn').addEventListener('click', () => exportXLSX());
     document.getElementById('export-csv-btn').addEventListener('click',   () => exportCSV('rebar_analysis.csv'));
+    document.getElementById('export-ubars-btn').addEventListener('click',  () => exportEDB('ubars'));
+    document.getElementById('export-struts-btn').addEventListener('click', () => exportEDB('struts'));
+    // Live-update computed gValue preview when span changes
+    ['edb-wall-thickness','edb-structural-span'].forEach(id => {
+        document.getElementById(id).addEventListener('input', updateEDBComputedInfo);
+    });
 
     document.getElementById('page-prev').addEventListener('click', () => {
         if (currentPage > 1) { currentPage--; renderTable(); }
@@ -258,6 +264,9 @@ function displayResults(parser) {
     document.getElementById('results-section').classList.remove('hidden');
     applyFilters();
     buildC01Cards(parser);
+    document.getElementById('export-ubars-btn').disabled  = false;
+    document.getElementById('export-struts-btn').disabled = false;
+    updateEDBComputedInfo();
 }
 
 // ── Cage dimension boxes (parser centreline, updated by BREP after viewer loads) ──
@@ -762,6 +771,139 @@ function exportXLSX() {
     const cageRef = (document.getElementById('ifc-filename').textContent || 'cage')
         .replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 40);
     XLSX.writeFile(wb, `${cageRef}_rebar_schedule.xlsx`);
+}
+
+// ── EDB Excel (U-bars / Struts templates) ──────────────────────────────
+
+function computeLayerStatsForEDB() {
+    // Group bars by Avonmouth mesh layer (F1A, N1A, etc.)
+    const layerBars = {};
+    allData.forEach(b => {
+        const av = b.Avonmouth_Layer_Set;
+        if (!av || !/^[FN]\d+A$/i.test(av)) return;
+        if (!layerBars[av]) layerBars[av] = [];
+        layerBars[av].push(b);
+    });
+
+    const stats = {};
+    for (const [layer, bars] of Object.entries(layerBars)) {
+        const hBars = bars.filter(b => b.Orientation === 'Horizontal');
+        const vBars = bars.filter(b => b.Orientation === 'Vertical');
+
+        const hSizes = hBars.map(b => b.Size).filter(s => s > 0);
+        const hDiaMin = hSizes.length ? Math.min(...hSizes) : null;
+        const hDiaMax = hSizes.length ? Math.max(...hSizes) : null;
+
+        const { count: nLacers } = countUniqueHorizPositions(hBars);
+
+        const vH = heightAlongAxis(vBars);
+        const vHeightMax = vH ? vH.height : null;
+
+        stats[layer] = { hDiaMin, hDiaMax, nLacers, vHeightMax };
+    }
+    return stats;
+}
+
+function getCageLengthMm() {
+    // Recompute cage length (longest XY extent) from allData
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    allData.forEach(b => {
+        if (b.Start_X == null) return;
+        const dia = (b.Size || 0) / 2;
+        minX = Math.min(minX, b.Start_X - dia, b.End_X - dia);
+        maxX = Math.max(maxX, b.Start_X + dia, b.End_X + dia);
+        minY = Math.min(minY, b.Start_Y - dia, b.End_Y - dia);
+        maxY = Math.max(maxY, b.Start_Y + dia, b.End_Y + dia);
+    });
+    if (!isFinite(minX)) return null;
+    return Math.max(maxX - minX, maxY - minY);
+}
+
+function updateEDBComputedInfo() {
+    if (!allData.length) return;
+    const spanM = parseFloat(document.getElementById('edb-structural-span').value);
+    const info  = document.getElementById('edb-computed-info');
+    if (!spanM || spanM <= 0) { info.textContent = ''; return; }
+    const cageLenMm = getCageLengthMm();
+    if (!cageLenMm) { info.textContent = ''; return; }
+    const nLifts = Math.ceil(cageLenMm / (spanM * 1000));
+    let gValue;
+    if (nLifts <= 6)       gValue = nLifts;
+    else if (nLifts <= 18) gValue = Math.ceil(nLifts / 2);
+    else                   gValue = Math.ceil(nLifts / 3);
+    info.innerHTML = `Cage length: <span>${Math.round(cageLenMm).toLocaleString()} mm</span> &nbsp;·&nbsp; Lifting points: <span>${nLifts}</span> &nbsp;·&nbsp; G-value: <span>${gValue}</span>`;
+}
+
+async function exportEDB(type) {
+    if (!allData.length) { alert('No data to export.'); return; }
+    if (typeof XLSX === 'undefined') { alert('Excel library not loaded.'); return; }
+
+    const wallThickness  = parseFloat(document.getElementById('edb-wall-thickness').value);
+    const structuralSpan = parseFloat(document.getElementById('edb-structural-span').value);
+    if (isNaN(wallThickness)  || wallThickness  <= 0) { alert('Enter a valid wall thickness (mm).'); return; }
+    if (isNaN(structuralSpan) || structuralSpan <= 0) { alert('Enter a valid structural span (m).'); return; }
+
+    // Compute values
+    const layerStats = computeLayerStatsForEDB();
+    const meshBars     = allData.filter(b => b.Bar_Type === 'Mesh');
+    const nonMeshBars  = allData.filter(b => b.Bar_Type !== 'Mesh' && b.Bar_Type !== 'Unknown');
+    const meshWeight   = meshBars.reduce((s, b)    => s + (b.Weight || 0), 0);
+    const nonMeshWeight= nonMeshBars.reduce((s, b) => s + (b.Weight || 0), 0);
+    const udlFactor    = meshWeight > 0 ? Math.round(nonMeshWeight / meshWeight * 1000) / 1000 : 0;
+
+    const cageLenMm = getCageLengthMm() || 0;
+    const nLifts    = Math.ceil(cageLenMm / (structuralSpan * 1000));
+    let gValue;
+    if (nLifts <= 6)       gValue = nLifts;
+    else if (nLifts <= 18) gValue = Math.ceil(nLifts / 2);
+    else                   gValue = Math.ceil(nLifts / 3);
+
+    // Fetch + fill template
+    const btn = document.getElementById(type === 'ubars' ? 'export-ubars-btn' : 'export-struts-btn');
+    const origText = btn.textContent;
+    btn.textContent = '⏳ Generating…'; btn.disabled = true;
+
+    try {
+        const resp = await fetch(`templates/edb-${type}.xlsm`);
+        if (!resp.ok) throw new Error(`Template not found: edb-${type}.xlsm`);
+        const buf = await resp.arrayBuffer();
+        const wb  = XLSX.read(new Uint8Array(buf), { type: 'array' });
+
+        const sheetName = wb.SheetNames.find(n => n === 'Span Lookup') || wb.SheetNames[0];
+        const ws = wb.Sheets[sheetName];
+
+        function setCell(ref, val) {
+            if (!ws[ref]) ws[ref] = {};
+            ws[ref].t = 'n'; ws[ref].v = val; delete ws[ref].f;
+        }
+
+        setCell(type === 'ubars' ? 'C35' : 'C39', wallThickness);
+        setCell(type === 'ubars' ? 'C33' : 'C37', udlFactor);
+        if (type === 'ubars') setCell('C39', structuralSpan);
+        setCell(type === 'ubars' ? 'G35' : 'G39', gValue);
+
+        const layerRows = type === 'ubars'
+            ? { F1A: 20, F3A: 22, F5A: 24, N1A: 26, N3A: 28, N5A: 30 }
+            : { F1A: 20, F3A: 22, F5A: 24, F7A: 26, N1A: 28, N3A: 30, N5A: 32, N7A: 34 };
+
+        for (const [layer, hRow] of Object.entries(layerRows)) {
+            const s = layerStats[layer];
+            if (!s) continue;
+            const vRow = hRow + 1;
+            if (s.hDiaMin  != null) setCell(`C${hRow}`, s.hDiaMin);
+            if (s.hDiaMax  != null) setCell(`D${hRow}`, s.hDiaMax);
+            if (s.nLacers  != null) setCell(`E${hRow}`, s.nLacers);
+            if (s.vHeightMax != null) setCell(`F${vRow}`, s.vHeightMax / 1000);
+        }
+
+        const cageRef = (document.getElementById('ifc-filename').textContent || 'cage')
+            .replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 40);
+        XLSX.writeFile(wb, `${cageRef}-EDB-${type}.xlsx`);
+    } catch (e) {
+        alert(`Failed to generate EDB: ${e.message}`);
+    } finally {
+        btn.textContent = origText; btn.disabled = false;
+    }
 }
 
 // ── C01 detail cards ───────────────────────────────────────────────────
