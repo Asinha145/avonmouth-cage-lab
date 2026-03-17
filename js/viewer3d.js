@@ -259,6 +259,41 @@ class Viewer3D {
         this._applyOrbit();
     }
 
+    // ── Capture front + side screenshots ────────────────────────────────
+    /**
+     * Renders a front and side (right) view to PNG data URLs.
+     * Saves and restores the current orbit state.
+     * @returns {{ front: string|null, side: string|null }}
+     */
+    async captureViews() {
+        if (!this.renderer || !this.scene || !this.camera) return { front: null, side: null };
+
+        // Save current orbit
+        const savedTheta  = this._orbit.spherical.theta;
+        const savedPhi    = this._orbit.spherical.phi;
+        const savedRadius = this._orbit.spherical.radius;
+        const savedTarget = this._orbit.target.clone();
+
+        // Front view
+        this.setView('front');
+        this.renderer.render(this.scene, this.camera);
+        const front = this.renderer.domElement.toDataURL('image/png');
+
+        // Right (side) view
+        this.setView('right');
+        this.renderer.render(this.scene, this.camera);
+        const side = this.renderer.domElement.toDataURL('image/png');
+
+        // Restore orbit
+        this._orbit.spherical.theta  = savedTheta;
+        this._orbit.spherical.phi    = savedPhi;
+        this._orbit.spherical.radius = savedRadius;
+        this._orbit.target.copy(savedTarget);
+        this._applyOrbit();
+
+        return { front, side };
+    }
+
     // ── Bar colour by layer ──────────────────────────────────────────────
     _barColour(bar) {
         if (!bar) return 0x888888;
