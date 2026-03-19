@@ -898,9 +898,17 @@ function getCageLengthMm() {
     const s = _meshXYSpans(); return s ? Math.max(s.spanX, s.spanY) : null;
 }
 
+// Mesh-only width — outer-to-outer of mesh bars. Used by cage-sequence Excel.
 function getCageWidthMm() {
     if (_wasm3DDims) return _wasm3DDims.meshWidth;
     const s = _meshXYSpans(); return s ? Math.min(s.spanX, s.spanY) : null;
+}
+
+// Overall width — outer-to-outer of ALL bars (mesh + strut + link + loose).
+// Used by EDB wall-thickness autofill.
+function getOverallWidthMm() {
+    if (_wasm3DDims) return _wasm3DDims.overallWidth;
+    const s = _cageXYSpans(); return s ? Math.min(s.spanX, s.spanY) : null;
 }
 
 // Round raw mm up to nearest standard wall thickness; return in metres
@@ -912,13 +920,13 @@ function roundWallThicknessM(rawMm) {
 
 function autoFillEDBInputs() {
     if (!allData.length) return;
-    const widthMm = getCageWidthMm();
+    const widthMm = getOverallWidthMm();  // overall (all bars) — wall must contain the whole cage
     if (widthMm == null) return;
     const rawMm  = widthMm + 100;
     const wallM  = roundWallThicknessM(rawMm);
     document.getElementById('edb-wall-thickness').value = wallM;
     document.getElementById('edb-wall-hint').textContent =
-        `cage width ${Math.round(widthMm).toLocaleString()} mm + 100 mm cover = ${Math.round(rawMm)} mm → ${wallM} m`;
+        `overall cage width ${Math.round(widthMm).toLocaleString()} mm + 100 mm cover = ${Math.round(rawMm)} mm → ${wallM} m`;
     updateEDBComputedInfo();
 }
 
