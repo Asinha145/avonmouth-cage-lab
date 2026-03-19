@@ -313,28 +313,10 @@ function displayCageDimensionBoxes() {
     });
     const heightVal = isFinite(minZ) ? maxZ - minZ : null;
 
-    let minXspan = Infinity, maxXspan = -Infinity, minYspan = Infinity, maxYspan = -Infinity;
-    let minXbar = null, maxXbar = null, minYbar = null, maxYbar = null;
-    meshBars.forEach(b => {
-        const dia = b.Size || b.NominalDiameter_mm || 0;
-        [b.Start_X, b.End_X].forEach(x => {
-            if (x < minXspan) { minXspan = x; minXbar = dia; }
-            if (x > maxXspan) { maxXspan = x; maxXbar = dia; }
-        });
-        [b.Start_Y, b.End_Y].forEach(y => {
-            if (y < minYspan) { minYspan = y; minYbar = dia; }
-            if (y > maxYspan) { maxYspan = y; maxYbar = dia; }
-        });
-    });
-    const spanX = isFinite(minXspan) ? (maxXspan - minXspan) + (maxXbar / 2) + (minXbar / 2) : null;
-    const spanY = isFinite(minYspan) ? (maxYspan - minYspan) + (maxYbar / 2) + (minYbar / 2) : null;
-    let widthVal = null, lengthVal = null;
-    if (spanX !== null && spanY !== null) {
-        lengthVal = Math.max(spanX, spanY);
-        widthVal  = Math.min(spanX, spanY);
-    } else {
-        lengthVal = spanX ?? spanY;
-    }
+    // Overall width/length (all bars) for website display — BREP will replace this once loaded
+    const overallSpans = _cageXYSpans();
+    let widthVal  = overallSpans ? Math.min(overallSpans.spanX, overallSpans.spanY) : null;
+    let lengthVal = overallSpans ? Math.max(overallSpans.spanX, overallSpans.spanY) : null;
 
     const fmt = v => v !== null && isFinite(v) ? Math.round(v).toLocaleString() + ' mm' : '—';
     document.getElementById('dim-width').textContent  = fmt(widthVal);
@@ -361,8 +343,9 @@ function _updateDimBoxesFromBREP(dims) {
     // Store for use by getCageWidthMm / getCageLengthMm (WASM is more accurate than text parser)
     _wasm3DDims = dims;
     const fmt = v => v !== null && isFinite(v) ? Math.round(v).toLocaleString() + ' mm' : '—';
-    document.getElementById('dim-width').textContent  = fmt(dims.width);
-    document.getElementById('dim-length').textContent = fmt(dims.length);
+    // Overall width/length (all bars) shown on website
+    document.getElementById('dim-width').textContent  = fmt(dims.overallWidth);
+    document.getElementById('dim-length').textContent = fmt(dims.overallLength);
     document.getElementById('dim-height').textContent = fmt(dims.height);
     // Re-run EDB auto-fill now that accurate WASM dims are available
     autoFillEDBInputs();
@@ -894,14 +877,30 @@ function _cageXYSpans() {
     return { spanX: maxX - minX, spanY: maxY - minY };
 }
 
+// Mesh-only XY spans (centreline ± half-dia) — fallback when BREP is not yet loaded.
+// Used by getCageWidthMm / getCageLengthMm which feed Excel/EDB (mesh outer-to-outer).
+function _meshXYSpans() {
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    allData.forEach(b => {
+        if (b.Bar_Type !== 'Mesh' || b.Start_X == null) return;
+        const r = (b.Size || 0) / 2;
+        minX = Math.min(minX, b.Start_X - r, b.End_X - r);
+        maxX = Math.max(maxX, b.Start_X + r, b.End_X + r);
+        minY = Math.min(minY, b.Start_Y - r, b.End_Y - r);
+        maxY = Math.max(maxY, b.Start_Y + r, b.End_Y + r);
+    });
+    if (!isFinite(minX)) return null;
+    return { spanX: maxX - minX, spanY: maxY - minY };
+}
+
 function getCageLengthMm() {
-    if (_wasm3DDims) return _wasm3DDims.length;
-    const s = _cageXYSpans(); return s ? Math.max(s.spanX, s.spanY) : null;
+    if (_wasm3DDims) return _wasm3DDims.meshLength;
+    const s = _meshXYSpans(); return s ? Math.max(s.spanX, s.spanY) : null;
 }
 
 function getCageWidthMm() {
-    if (_wasm3DDims) return _wasm3DDims.width;
-    const s = _cageXYSpans(); return s ? Math.min(s.spanX, s.spanY) : null;
+    if (_wasm3DDims) return _wasm3DDims.meshWidth;
+    const s = _meshXYSpans(); return s ? Math.min(s.spanX, s.spanY) : null;
 }
 
 // Round raw mm up to nearest standard wall thickness; return in metres
