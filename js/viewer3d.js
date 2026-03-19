@@ -34,8 +34,10 @@ class Viewer3D {
         // Map: expressID (int) → THREE.Mesh  (for click/highlight later)
         this.meshByExpId = new Map();
 
-        // Bounding box of MESH bars in IFC mm (filled during loadIFC)
+        // Bounding box of MESH bars only — used for mesh-only dims (Excel/EDB)
         this.brepBbox = null;
+        // Bounding box of ALL bars — used for overall width display on website
+        this.allBrepBbox = null;
 
         // Orbit state
         this._orbit = {
@@ -107,8 +109,13 @@ class Viewer3D {
         this.layerGroups.clear();
         this.meshByExpId.clear();
 
-        // Reset bbox
+        // Reset bboxes
         this.brepBbox = {
+            minX: Infinity, maxX: -Infinity,
+            minY: Infinity, maxY: -Infinity,
+            minZ: Infinity, maxZ: -Infinity,
+        };
+        this.allBrepBbox = {
             minX: Infinity, maxX: -Infinity,
             minY: Infinity, maxY: -Infinity,
             minZ: Infinity, maxZ: -Infinity,
@@ -151,8 +158,7 @@ class Viewer3D {
                     allPos.push(wx, wy, wz);
                     allNrm.push(wnx, wny, wnz);
 
-                    // Bbox in web-ifc metres (Y-up); track all bars for scene fit,
-                    // but only MESH bars for the dimension display
+                    // Mesh-only bbox — used for Excel/EDB dimensions (outer-to-outer of mesh cage)
                     if (bar && (bar.Bar_Type === 'Mesh')) {
                         if (wx < this.brepBbox.minX) this.brepBbox.minX = wx;
                         if (wx > this.brepBbox.maxX) this.brepBbox.maxX = wx;
@@ -160,6 +166,15 @@ class Viewer3D {
                         if (wy > this.brepBbox.maxY) this.brepBbox.maxY = wy;
                         if (wz < this.brepBbox.minZ) this.brepBbox.minZ = wz;
                         if (wz > this.brepBbox.maxZ) this.brepBbox.maxZ = wz;
+                    }
+                    // All-bars bbox — used for overall width/length display on the website
+                    if (bar) {
+                        if (wx < this.allBrepBbox.minX) this.allBrepBbox.minX = wx;
+                        if (wx > this.allBrepBbox.maxX) this.allBrepBbox.maxX = wx;
+                        if (wy < this.allBrepBbox.minY) this.allBrepBbox.minY = wy;
+                        if (wy > this.allBrepBbox.maxY) this.allBrepBbox.maxY = wy;
+                        if (wz < this.allBrepBbox.minZ) this.allBrepBbox.minZ = wz;
+                        if (wz > this.allBrepBbox.maxZ) this.allBrepBbox.maxZ = wz;
                     }
                 }
 
@@ -223,11 +238,18 @@ class Viewer3D {
         const spanY = (b.maxY - b.minY) * 1000; // IFC Z mm (height)
         const spanZ = (b.maxZ - b.minZ) * 1000; // IFC Y mm
 
-        const height = Math.round(spanY);
-        const width  = Math.round(Math.min(spanX, spanZ));
-        const length = Math.round(Math.max(spanX, spanZ));
+        const height     = Math.round(spanY);
+        const meshWidth  = Math.round(Math.min(spanX, spanZ)); // mesh outer-to-outer (Excel/EDB)
+        const meshLength = Math.round(Math.max(spanX, spanZ));
 
-        return { width, length, height };
+        // Overall dims from all bars (website display)
+        const ab = this.allBrepBbox;
+        const aSpanX = (ab.maxX - ab.minX) * 1000;
+        const aSpanZ = (ab.maxZ - ab.minZ) * 1000;
+        const overallWidth  = Math.round(Math.min(aSpanX, aSpanZ));
+        const overallLength = Math.round(Math.max(aSpanX, aSpanZ));
+
+        return { meshWidth, meshLength, height, overallWidth, overallLength };
     }
 
     // ── Layer visibility toggle ──────────────────────────────────────────

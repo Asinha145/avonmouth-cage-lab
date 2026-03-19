@@ -1,0 +1,27 @@
+{
+  "name": "avonmouth-cage-v2",
+  "version": "1.0.0",
+  "description": "Browser-based tool for analysing reinforcement bar cages exported from ATK/Tekla as IFC2X3 files. Built for the **Avonmouth Dock Wall** project (LOR/Bylor JV).",
+  "main": "ifc_parser_live.js",
+  "directories": {
+    "example": "examples",
+    "lib": "lib"
+  },
+  "scripts": {
+    "test": "node test-dims.mjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Asinha145/ifc-rebar-analyzer-v2.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/Asinha145/ifc-rebar-analyzer-v2/issues"
+  },
+  "homepage": "https://github.com/Asinha145/ifc-rebar-analyzer-v2#readme",
+  "dependencies": {
+    "web-ifc": "^0.0.77"
+  }
+}
