@@ -105,7 +105,7 @@ class IFCParser {
     // ── Entity / property / relationship builders ──────────────────────
 
     buildEntityLookup(lines) {
-        const re = /^#(\d+)=(.+)$/;
+        const re = /^#(\d+)\s*=\s*(.+)$/;
         lines.forEach(l => {
             const m = l.match(re);
             if (m) this.entities.set(m[1], m[2]);
@@ -114,7 +114,7 @@ class IFCParser {
     }
 
     buildPropertiesDict(lines) {
-        const re = /^#(\d+)=IFCPROPERTYSINGLEVALUE\('([^']+)',.*?(?:IFCTEXT|IFCLABEL|IFCMASSMEASURE|IFCLENGTHMEASURE|IFCINTEGER|IFCIDENTIFIER)\('?([^')\s]+)'?\)/;
+        const re = /^#(\d+)\s*=\s*IFCPROPERTYSINGLEVALUE\('([^']+)',.*?(?:IFCTEXT|IFCLABEL|IFCMASSMEASURE|IFCLENGTHMEASURE|IFCINTEGER|IFCIDENTIFIER)\('?([^')\s]+)'?\)/;
         lines.forEach(l => {
             const m = l.match(re);
             if (m) this.propertiesDict.set(m[1], { name: m[2], value: m[3] });
@@ -124,7 +124,7 @@ class IFCParser {
 
     buildRelationshipIndex(lines) {
         lines.forEach(l => {
-            const relM = l.match(/IFCRELDEFINESBYPROPERTIES\([^,]+,[^,]+,[^,]+,[^,]+,\(([^)]+)\),#(\d+)\)/);
+            const relM = l.match(/IFCRELDEFINESBYPROPERTIES\('[^']+',\s*[^,]+,\s*[^,]+,\s*[^,]+,\s*\(([^)]+)\),\s*#(\d+)\)/);
             if (relM) {
                 const psetId = relM[2];
                 (relM[1].match(/#(\d+)/g) || []).forEach(e => {
@@ -133,7 +133,7 @@ class IFCParser {
                     this.entityToPsets.get(id).push(psetId);
                 });
             }
-            const psetM = l.match(/^#(\d+)=IFCPROPERTYSET\([^,]+,[^,]+,'([^']+)',[^,]+,\(([^)]+)\)/);
+            const psetM = l.match(/^#(\d+)\s*=\s*IFCPROPERTYSET\([^,]+,\s*[^,]+,\s*'([^']+)',\s*[^,]+,\s*\(([^)]+)\)/);
             if (psetM) {
                 const ids = (psetM[3].match(/#(\d+)/g) || []).map(p => p.slice(1));
                 this.psetToProps.set(psetM[1], { name: psetM[2], props: ids });
@@ -146,7 +146,7 @@ class IFCParser {
 
     extractReinforcementBars(lines) {
         const bars = [];
-        const re   = /#(\d+)=IFCREINFORCINGBAR\('([^']+)'.*?#(\d+),#(\d+),'?(ID[^',)]+)?'?.*?,([\d.]+),/;
+        const re   = /#(\d+)\s*=\s*IFCREINFORCINGBAR\('([^']+)'.*?#(\d+),\s*#(\d+),\s*'?(ID[^',)]+)?'?.*?,\s*([\d.]+),/;
         lines.forEach(line => {
             if (!line.includes('IFCREINFORCINGBAR')) return;
             const m = line.match(re);
