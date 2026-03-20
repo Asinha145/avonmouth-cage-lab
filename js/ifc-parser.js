@@ -287,7 +287,7 @@ class IFCParser {
         if (depth > 8) return null;
         const raw = this.entities.get(placementId);
         if (!raw) return null;
-        const m = raw.match(/IFCLOCALPLACEMENT\(([^,]+),#(\d+)\)/);
+        const m = raw.match(/IFCLOCALPLACEMENT\(([^,]+),\s*#(\d+)\)/);
         if (!m) return null;
         const parentRef = m[1].trim(), axis2Id = m[2];
         const local = this._parseAxis2(axis2Id);
@@ -310,7 +310,7 @@ class IFCParser {
     _parseAxis2(id) {
         const raw = this.entities.get(id);
         if (!raw) return null;
-        const m = raw.match(/IFCAXIS2PLACEMENT3D\(#(\d+),(#\d+|\$),(#\d+|\$)\)/);
+        const m = raw.match(/IFCAXIS2PLACEMENT3D\(\s*#(\d+),\s*(#\d+|\$),\s*(#\d+|\$)\s*\)/);
         if (!m) return null;
         const P   = this._getPoint(m[1]) || [0,0,0];
         const lZ  = m[2] !== '$' ? (this._getDir(m[2].slice(1)) || [0,0,1]) : [0,0,1];
@@ -350,7 +350,7 @@ class IFCParser {
         if (!miM) return null;
         const xform = this.entities.get(miM[1]);
         if (!xform) return null;
-        const xfM = xform.match(/IFCCARTESIANTRANSFORMATIONOPERATOR3D[^(]*\([^,]*,[^,]*,(#\d+|\$)/);
+        const xfM = xform.match(/IFCCARTESIANTRANSFORMATIONOPERATOR3D[^(]*\([^,]*,[^,]*,\s*(#\d+|\$)/);
         if (!xfM || xfM[1] === '$') return [0, 0, 0];
         return this._getPoint(xfM[1].slice(1)) || [0, 0, 0];
     }
@@ -446,14 +446,15 @@ class IFCParser {
      */
     tagOrientation(bars) {
         bars.forEach(bar => {
-            if (bar.Dir_X === null) { bar.Orientation = 'Unknown'; return; }
-            // For bars with a known ATK/ICOS layer name, use the parity rule
-            // (odd = horizontal, even = vertical) — more reliable than global-Z heuristic.
+            // ATK/ICOS parity rule takes priority — works even without resolved positions.
+            // (odd = horizontal, even = vertical)
             const atkOri = this._atkOrientation(bar.ATK_Layer_Name);
             if (atkOri) {
                 bar.Orientation = atkOri;
                 return;
             }
+            // No positions resolved — cannot determine orientation geometrically.
+            if (bar.Dir_X === null) { bar.Orientation = 'Unknown'; return; }
             // Fallback: global-Z heuristic — bar is horizontal if it doesn't travel up/down
             bar.Orientation = Math.abs(bar.Dir_Z) < 0.5 ? 'Horizontal' : 'Vertical';
         });
