@@ -23,6 +23,8 @@ let cageAxisName = 'Z';
 let _wasm3DDims     = null;
 // C01 rejection state — gating EDB and report exports
 let _parserRejected = false;
+// Slab cage flag — set after analysis, gates slab vs wall EDB buttons
+let _isSlabCage = false;
 
 // ── Initialise viewer on page load ─────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
@@ -65,6 +67,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('export-excel-btn').addEventListener('click', () => exportXLSX());
     document.getElementById('export-ubars-btn').addEventListener('click',  () => exportEDB('ubars'));
     document.getElementById('export-struts-btn').addEventListener('click', () => exportEDB('struts'));
+    document.getElementById('export-slab-btn').addEventListener('click',   () => exportSlabEDB());
     document.getElementById('export-report-btn').addEventListener('click', () => exportCageReport());
     document.getElementById('edb-wall-thickness').addEventListener('input', updateEDBComputedInfo);
 
@@ -286,8 +289,21 @@ function displayResults(parser) {
     buildC01Cards(parser);
     // Gate EDB and report exports on C01 approval
     _parserRejected = rejected;
-    document.getElementById('export-ubars-btn').disabled  = rejected;
-    document.getElementById('export-struts-btn').disabled = rejected;
+    _isSlabCage = IFCParser.isSlabCage(allData);
+
+    // Show/hide slab vs wall EDB buttons
+    const slabBtn  = document.getElementById('export-slab-btn');
+    const wallEdb  = document.getElementById('edb-wall-section');
+    if (_isSlabCage) {
+        if (slabBtn)  { slabBtn.style.display = 'inline-block'; slabBtn.disabled = rejected; }
+        if (wallEdb)  wallEdb.style.display = 'none';
+    } else {
+        if (slabBtn)  slabBtn.style.display = 'none';
+        if (wallEdb)  wallEdb.style.display = '';
+        document.getElementById('export-ubars-btn').disabled  = rejected;
+        document.getElementById('export-struts-btn').disabled = rejected;
+    }
+
     const reportBtn = document.getElementById('export-report-btn');
     if (reportBtn) reportBtn.classList.toggle('hidden', rejected);
     autoFillEDBInputs();
@@ -1031,6 +1047,61 @@ async function exportEDB(type) {
         document.body.removeChild(a); URL.revokeObjectURL(url);
     } catch (e) {
         alert(`EDB generation failed: ${e.message}`);
+    } finally {
+        btn.textContent = orig; btn.disabled = false;
+    }
+}
+
+// ── Slab EDB Excel ────────────────────────────────────────────────────
+async function exportSlabEDB() {
+    if (!allData.length) { alert('No data to export.'); return; }
+    if (_parserRejected) { alert('C01 rejected — EDB cannot be exported for a rejected cage.'); return; }
+    if (typeof XlsxPopulate === 'undefined') { alert('Excel library not loaded.'); return; }
+
+    const parser = new IFCParser();
+    const sd = parser.extractSlabData(allData);
+
+    const btn = document.getElementById('export-slab-btn');
+    const orig = btn.textContent;
+    btn.textContent = '⏳ Generating…'; btn.disabled = true;
+
+    try {
+        const resp = await fetch('templates/slab-template.xlsx');
+        if (!resp.ok) throw new Error('Slab template not found: templates/slab-template.xlsx');
+        const buf = await resp.arrayBuffer();
+
+        const wb = await XlsxPopulate.fromDataAsync(buf);
+        const ws = wb.sheet('INPUT SPAN RESULTS');
+        if (!ws) throw new Error('Sheet "INPUT SPAN RESULTS" not found in slab template');
+
+        const set = (col, val) => { if (val != null) ws.cell(`${col}36`).value(val); };
+        set('H', sd.cageLength);
+        set('I', sd.cageHeight);
+        set('J', sd.totalWeight);
+        set('N', sd.t1Dia);
+        set('O', sd.t1Spacing);
+        set('P', sd.t2Dia);
+        set('Q', sd.t2Spacing);
+        set('R', sd.t2Count);
+        set('T', sd.b1Dia);
+        set('U', sd.b1Spacing);
+        set('V', sd.b2Dia);
+        set('W', sd.b2Spacing);
+        set('X', sd.b2Count);
+        set('Z', sd.meshWeight);
+
+        const cageRef = (document.getElementById('ifc-filename').textContent || 'cage')
+            .replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 40);
+
+        const outBuf = await wb.outputAsync();
+        const blob = new Blob([outBuf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = `${cageRef}-Slab-EDB.xlsx`;
+        document.body.appendChild(a); a.click();
+        document.body.removeChild(a); URL.revokeObjectURL(url);
+    } catch (e) {
+        alert(`Slab EDB generation failed: ${e.message}`);
     } finally {
         btn.textContent = orig; btn.disabled = false;
     }
