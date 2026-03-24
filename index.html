@@ -436,16 +436,24 @@
                 <!-- EDB Design Sheet Downloads -->
                 <div class="edb-section">
                     <h4>EDB Design Sheets</h4>
-                    <p class="edb-note">Populates U-bar and Strut EDB templates from cage IFC data. Wall thickness is auto-computed from cage width + 100 mm cover, rounded to the nearest standard size.</p>
-                    <div class="edb-inputs">
-                        <label>Wall Thickness (m)
-                            <input type="number" id="edb-wall-thickness" placeholder="auto" min="0.1" max="3.0" step="0.1">
-                            <span style="font-size:.75rem;color:#888;margin-top:2px" id="edb-wall-hint"></span>
-                        </label>
+
+                    <!-- Slab EDB (shown only for roof slab cages: T1A+B1A layers) -->
+                    <button id="export-slab-btn" class="btn-secondary btn-edb" disabled style="display:none">📥 Download Slab EDB</button>
+
+                    <!-- Wall EDB (shown for standard wall cages) -->
+                    <div id="edb-wall-section">
+                        <p class="edb-note">Populates U-bar and Strut EDB templates from cage IFC data. Wall thickness is auto-computed from cage width + 100 mm cover, rounded to the nearest standard size.</p>
+                        <div class="edb-inputs">
+                            <label>Wall Thickness (m)
+                                <input type="number" id="edb-wall-thickness" placeholder="auto" min="0.1" max="3.0" step="0.1">
+                                <span style="font-size:.75rem;color:#888;margin-top:2px" id="edb-wall-hint"></span>
+                            </label>
+                        </div>
+                        <div class="edb-computed" id="edb-computed-info"></div>
+                        <button id="export-ubars-btn"  class="btn-secondary btn-edb" disabled>📥 Download U-bars EDB</button>
+                        <button id="export-struts-btn" class="btn-secondary btn-edb" disabled>📥 Download Struts EDB</button>
                     </div>
-                    <div class="edb-computed" id="edb-computed-info"></div>
-                    <button id="export-ubars-btn"  class="btn-secondary btn-edb" disabled>📥 Download U-bars EDB</button>
-                    <button id="export-struts-btn" class="btn-secondary btn-edb" disabled>📥 Download Struts EDB</button>
+
                     <button id="export-report-btn" class="btn-secondary btn-edb hidden">📋 Export C01 Report</button>
                 </div>
             </div>
