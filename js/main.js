@@ -1035,6 +1035,10 @@ async function exportEDB(type) {
             setVal(`G${bracingRow}`, bracing[3]);
         }
 
+        // H19: production line classification (> 5600mm = Bespoke, else Pallet line)
+        const cageHeightMm = _wasm3DDims ? _wasm3DDims.height : null;
+        if (cageHeightMm != null) setVal('H19', cageHeightMm > 5600 ? 'Bespoke' : 'Pallet line');
+
         const cageRef = (document.getElementById('ifc-filename').textContent || 'cage')
             .replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 40);
 
@@ -1089,6 +1093,9 @@ async function exportSlabEDB() {
         set('W', sd.b2Spacing);
         set('X', sd.b2Count);
         set('Z', sd.meshWeight);
+
+        // H42: production line classification (> 5600mm = Bespoke, else Pallet line)
+        if (sd.cageHeight != null) ws.cell('H42').value(sd.cageHeight > 5600 ? 'Bespoke' : 'Pallet line');
 
         const cageRef = (document.getElementById('ifc-filename').textContent || 'cage')
             .replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 40);
