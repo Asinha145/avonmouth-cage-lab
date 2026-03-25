@@ -205,43 +205,54 @@ class IFCParser {
             const pi = this.psetToProps.get(psetId);
             if (!pi) return;
             const psetName = pi.name;
-            const isATK    = psetName === 'ATK Rebar';
-            const isICOS   = psetName === 'ICOS Rebar';
+            const isATK         = psetName === 'ATK Rebar';
+            const isICOS        = psetName === 'ICOS Rebar';
+            const isINGEROP     = /^INGEROP\s+REBAR$/i.test(psetName);
+            // isVendorRebar: psets that contain authoritative per-bar weight/size/layer data.
+            // Add new vendor prefixes here — no other method needs to change.
+            const isVendorRebar = isATK || isICOS || isINGEROP;
+            // Tekla Reinforcement - General: INGEROP files store the layer name as 'Name'
+            // (e.g. 'FF1', 'NF2') — same format as ICOS, handled by existing tagEffectiveMeshLayer regex.
+            const isTeklaGeneral = /tekla reinforcement.*general/i.test(psetName);
             pi.props.forEach(propId => {
                 const p = this.propertiesDict.get(propId);
                 if (!p) return;
                 const { name: n, value: v } = p;
-                if      (n === 'source_global_id') bar.Source_Global_ID    = v;
-                else if (n === 'rebar_id')          bar.Rebar_ID            = v;
-                // ── Weight: ATK Rebar 'Weight' and ICOS Rebar 'Weight' are authoritative per-bar values.
-                // Only accept Weight from ATK or ICOS psets (never from arbitrary psets).
-                // 'Total Weight'/'Total weight' is a schedule-level aggregate — never use it for per-bar.
-                else if (n === 'Weight' && (isATK || isICOS)) {
+                const nl = n.toLowerCase();
+                if      (nl === 'source_global_id') bar.Source_Global_ID    = v;
+                else if (nl === 'rebar_id')          bar.Rebar_ID            = v;
+                // ── Weight: only from vendor rebar psets (ATK/ICOS/INGEROP) — per-bar value.
+                // Case-insensitive: ATK/ICOS use 'Weight', INGEROP uses 'WEIGHT'.
+                // 'WEIGHT_TOTAL' / 'WEIGHT_TOTAL_IN_GROUP' don't match nl==='weight' (exact equality).
+                else if (nl === 'weight' && isVendorRebar) {
                     const w = parseFloat(v);
                     if (w > 0) bar.Weight = w;
                 }
-                else if (n === 'Length')  bar.Length = parseFloat(v) || null;
+                // ── Length / Size: same concept across vendors, different casing.
+                // ATK/ICOS: 'Length', 'Size'  |  INGEROP: 'LENGTH', 'SIZE'
+                else if (nl === 'length')  bar.Length = parseFloat(v) || null;
                 else if (n === 'ID'        && psetName === 'Avonmouth') bar.Avonmouth_ID        = v;
                 else if (n === 'Layer/Set' && psetName === 'Avonmouth') bar.Avonmouth_Layer_Set = v || null;
-                // ATK Rebar: layer name
-                else if (n === 'Layer Name' && isATK) bar.ATK_Layer_Name = v;
-                // ICOS Rebar: layer equivalent is the 'Name' field (e.g. 'FF1', 'NF2', 'O.LINK')
-                else if (n === 'Name' && isICOS && !bar.ATK_Layer_Name) bar.ATK_Layer_Name = v;
-                else if (n === 'Size')           { bar.Size = parseFloat(v) || null; }
-                else if (n === 'Shape Code'  || n === 'Shape code')  { bar.Shape_Code = v; }
-                else if (n === 'Rebar Mark'  || n === 'Rebar mark')  { bar.Rebar_Mark = v; }
-                else if (n === 'Full Rebar Mark')    { bar.Full_Rebar_Mark = v; }
-                else if (n === 'Dim A')              { bar.Dim_A = parseFloat(v) || null; }
-                else if (n === 'Dim B')              { bar.Dim_B = parseFloat(v) || null; }
-                else if (n === 'Dim C')              { bar.Dim_C = parseFloat(v) || null; }
+                // ── Layer name — vendor priority: ATK explicit > ICOS/INGEROP Name > IFC Name fallback.
+                // ATK Rebar: 'Layer Name'  |  ICOS Rebar: 'Name'  |  INGEROP: 'Name' in Tekla General pset.
+                else if (nl === 'layer name' && isATK) bar.ATK_Layer_Name = v;
+                else if (nl === 'name' && (isICOS || isTeklaGeneral) && !bar.ATK_Layer_Name) bar.ATK_Layer_Name = v;
+                // ── Size: case-insensitive to cover INGEROP 'SIZE'.
+                else if (nl === 'size')          { bar.Size = parseFloat(v) || null; }
+                // ── Shape code: ATK='Shape Code', Tekla/INGEROP='Shape' or 'SHAPE'.
+                else if (/^shape(?:\s+code)?$/i.test(n))  { bar.Shape_Code = v; }
+                // ── Bar marks: ATK='Rebar Mark'/'Full Rebar Mark', INGEROP='SERIAL_NUMBER'/'BAR_MARK'.
+                else if (/^(rebar\s+mark|serial_number)$/i.test(n))                              { bar.Rebar_Mark = v; }
+                else if (/^(full\s+rebar\s+mark|bar_mark|group\s+position\s+number)$/i.test(n)) { bar.Full_Rebar_Mark = v; }
+                // ── Bending dims: ATK='Dim A', INGEROP='DIM_A' (underscore vs space, any case).
+                else if (/^dim[_\s]a$/i.test(n)) { bar.Dim_A = parseFloat(v) || null; }
+                else if (/^dim[_\s]b$/i.test(n)) { bar.Dim_B = parseFloat(v) || null; }
+                else if (/^dim[_\s]c$/i.test(n)) { bar.Dim_C = parseFloat(v) || null; }
             });
         });
         // Normalise blank Avonmouth layer to null
         if (bar.Avonmouth_Layer_Set === '') bar.Avonmouth_Layer_Set = null;
-        // Fallback: if no ATK Rebar pset exists, use the IFCREINFORCINGBAR Name field
-        // as ATK_Layer_Name. Some files (e.g. P1337 style) store the layer in 'Schedule
-        // Reference Data' → 'Layer Name' but our parser only reads ATK Rebar pset.
-        // The IFCREINFORCINGBAR Name field directly matches the ATK layer name.
+        // Last-resort layer name: use the IFCREINFORCINGBAR Name field if no vendor pset supplied one.
         if (!bar.ATK_Layer_Name && bar.Name) bar.ATK_Layer_Name = bar.Name;
     }
 
