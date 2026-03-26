@@ -1437,70 +1437,99 @@ function _doStepDetection() {
 
 // ── PRL / PRC geometry check ───────────────────────────────────────────
 
-function _computeMeshBoundingBox() {
-    let minX = Infinity, maxX = -Infinity;
-    let minY = Infinity, maxY = -Infinity;
-    let minZ = Infinity, maxZ = -Infinity;
-    allData.forEach(b => {
-        if (b.Bar_Type !== 'Mesh' || b.Start_X == null) return;
-        const r = (b.Size || 0) / 2;
-        minX = Math.min(minX, b.Start_X - r, b.End_X - r);
-        maxX = Math.max(maxX, b.Start_X + r, b.End_X + r);
-        minY = Math.min(minY, b.Start_Y - r, b.End_Y - r);
-        maxY = Math.max(maxY, b.Start_Y + r, b.End_Y + r);
-        minZ = Math.min(minZ, b.Start_Z - r, b.End_Z - r);
-        maxZ = Math.max(maxZ, b.Start_Z + r, b.End_Z + r);
-    });
-    return isFinite(minX) ? { minX, maxX, minY, maxY, minZ, maxZ } : null;
+// Compute F1A and N1A face zones + void from parsed mesh bar Y positions.
+// Returns { f1a:{minY,maxY}, n1a:{minY,maxY}, void:{minY,maxY} } or null.
+// Zones use outer-face extent (centreline ± bar radius).
+function _computeMeshFaceZones() {
+    const f1aBars = allData.filter(b => b.Avonmouth_Layer_Set === 'F1A' && b.Start_Y != null);
+    const n1aBars = allData.filter(b => b.Avonmouth_Layer_Set === 'N1A' && b.Start_Y != null);
+    if (!f1aBars.length || !n1aBars.length) return null;
+
+    const faceExtent = bars => {
+        let minY = Infinity, maxY = -Infinity;
+        bars.forEach(b => {
+            const r = (b.Size || 0) / 2;
+            minY = Math.min(minY, b.Start_Y - r, b.End_Y - r);
+            maxY = Math.max(maxY, b.Start_Y + r, b.End_Y + r);
+        });
+        return { minY, maxY };
+    };
+
+    const f1a = faceExtent(f1aBars);
+    const n1a = faceExtent(n1aBars);
+
+    // Void is the gap between the two face zones (orientation-independent)
+    const voidMinY = Math.min(f1a.maxY, n1a.maxY);
+    const voidMaxY = Math.max(f1a.minY, n1a.minY);
+    if (voidMinY >= voidMaxY) return null; // faces overlap — malformed cage
+
+    return { f1a, n1a, void: { minY: voidMinY, maxY: voidMaxY } };
 }
 
-function _barIntersectsMeshBox(bar, box) {
-    // AABB overlap test — bar's axis-aligned bounding box vs mesh bounding box
-    const bMinX = Math.min(bar.Start_X, bar.End_X);
-    const bMaxX = Math.max(bar.Start_X, bar.End_X);
-    const bMinY = Math.min(bar.Start_Y, bar.End_Y);
-    const bMaxY = Math.max(bar.Start_Y, bar.End_Y);
-    const bMinZ = Math.min(bar.Start_Z, bar.End_Z);
-    const bMaxZ = Math.max(bar.Start_Z, bar.End_Z);
-    return bMaxX >= box.minX && bMinX <= box.maxX
-        && bMaxY >= box.minY && bMinY <= box.maxY
-        && bMaxZ >= box.minZ && bMinZ <= box.maxZ;
+// Classify a single PRL/PRC bar by direction + zone.
+// Rules:
+//   wy direction (IFC Z, vertical)         → PRC  (runs along cage height)
+//   wx direction (IFC X, length), in void  → PRC  (ties across the concrete core)
+//   wx direction (IFC X, length), in face  → PRL  (sits within a mesh face)
+function _classifyPrlPrcBar(bar, zones) {
+    const ax = Math.abs(bar.Dir_X || 0);
+    const ay = Math.abs(bar.Dir_Y || 0);
+    const az = Math.abs(bar.Dir_Z || 0);
+
+    if (az > ax && az > ay) {
+        return { expected: 'PRC', reason: 'vertical bar (wy / IFC-Z direction)' };
+    }
+
+    if (ax > ay && ax > az) {
+        const y = bar.Start_Y; // wx bars: Start_Y ≈ End_Y
+        const { f1a, n1a } = zones;
+        const vMin = zones.void.minY, vMax = zones.void.maxY;
+
+        if (y > vMin && y < vMax)                     return { expected: 'PRC', reason: 'wx bar in interior void' };
+        if (y >= f1a.minY && y <= f1a.maxY)           return { expected: 'PRL', reason: 'wx bar in F1A face zone' };
+        if (y >= n1a.minY && y <= n1a.maxY)           return { expected: 'PRL', reason: 'wx bar in N1A face zone' };
+        return { expected: 'UNKNOWN', reason: `wx bar at Y=${Math.round(y)} outside known zones` };
+    }
+
+    return { expected: 'UNKNOWN', reason: 'width-direction bar (wz / IFC-Y)' };
 }
 
-// Returns { prlCorrect, prlMismatch, prcCorrect, prcMismatch, mismatches[], total, totalMis }
-// or null if no preload bars / no mesh box
+// Returns { prlCorrect, prlMismatch, prcCorrect, prcMismatch, mismatches[], total, totalMis, zones }
+// or null if no preload bars / zones cannot be computed.
 function _computePRLPRCMismatches() {
     const preloadBars = allData.filter(b => b.Bar_Type === 'Preload Bar' && b.Start_X != null);
     if (!preloadBars.length) return null;
-    const box = _computeMeshBoundingBox();
-    if (!box) return null;
+    const zones = _computeMeshFaceZones();
+    if (!zones) return null;
 
     let prlCorrect = 0, prlMismatch = 0, prcCorrect = 0, prcMismatch = 0;
     const mismatches = [];
 
     preloadBars.forEach(b => {
         const labeled = (b.Avonmouth_Layer_Set || '').toUpperCase();
-        const isPRL   = labeled.startsWith('PRL');
-        const isPRC   = labeled.startsWith('PRC');
+        const isPRL = labeled.startsWith('PRL');
+        const isPRC = labeled.startsWith('PRC');
         if (!isPRL && !isPRC) return;
 
-        const inside   = _barIntersectsMeshBox(b, box);
-        const geoLabel = inside ? 'PRL' : 'PRC';
-        const match    = (isPRL && inside) || (isPRC && !inside);
+        const { expected, reason } = _classifyPrlPrcBar(b, zones);
+        b._prlPrcExpected = expected;
+        b._prlPrcReason   = reason;
 
-        if (match) {
-            isPRL ? prlCorrect++ : prcCorrect++;
-            b._prlPrcMismatch = false; // ensure flag is clear on correct bars
+        const match = (isPRL && expected === 'PRL') || (isPRC && expected === 'PRC');
+
+        if (match || expected === 'UNKNOWN') {
+            if (match) isPRL ? prlCorrect++ : prcCorrect++;
+            b._prlPrcMismatch = false;
         } else {
             isPRL ? prlMismatch++ : prcMismatch++;
-            b._prlPrcMismatch = true;  // tag for 3D viewer highlight
-            mismatches.push({ bar: b, labeled: isPRL ? 'PRL' : 'PRC', geo: geoLabel });
+            b._prlPrcMismatch = true;
+            mismatches.push({ bar: b, labeled: isPRL ? 'PRL' : 'PRC', expected, reason });
         }
     });
 
     const total    = prlCorrect + prlMismatch + prcCorrect + prcMismatch;
     const totalMis = prlMismatch + prcMismatch;
-    return { prlCorrect, prlMismatch, prcCorrect, prcMismatch, mismatches, total, totalMis };
+    return { prlCorrect, prlMismatch, prcCorrect, prcMismatch, mismatches, total, totalMis, zones };
 }
 
 function _renderPRLPRCResults(result) {
@@ -1525,16 +1554,17 @@ function _renderPRLPRCResults(result) {
     } else {
         summaryDiv.innerHTML = `<div class="clash-fail">🚫 ${totalMis} mislabelled preload bar${totalMis !== 1 ? 's' : ''} — PRL: ${prlCorrect} correct / ${prlMismatch} mismatch &nbsp;·&nbsp; PRC: ${prcCorrect} correct / ${prcMismatch} mismatch</div>`;
         tbody.innerHTML = '';
-        mismatches.forEach(({ bar, labeled, geo }) => {
+        mismatches.forEach(({ bar, labeled, expected, reason }) => {
             const tr = document.createElement('tr');
             tr.className = 'danger-row';
             tr.innerHTML = `
                 <td>${bar.Rebar_Mark || bar.Full_Rebar_Mark || '—'}</td>
                 <td>${labeled}</td>
-                <td>${geo}</td>
+                <td>${expected}</td>
                 <td>⚠️ Mismatch</td>
                 <td>${bar.Avonmouth_Layer_Set || '—'}</td>
-                <td>${bar.Size ? bar.Size + ' mm' : '—'}</td>`;
+                <td>${bar.Size ? bar.Size + ' mm' : '—'}</td>
+                <td style="color:#aaa;font-size:11px">${reason}</td>`;
             tbody.appendChild(tr);
         });
         tableWrap.style.display = '';
