@@ -389,11 +389,15 @@ function _buildViewerCheckboxes() {
     layers.forEach(key => {
         const sampleBar = key === 'PRL/PRC Mismatch'
             ? { _prlPrcMismatch: true }
+            : key === 'Coupler Head'
+            ? null  // IFCBEAM entities — not in allData; _barColour(null) returns gray
             : allData.find(b => !b._prlPrcMismatch && (b.Avonmouth_Layer_Set || b.Bar_Type || 'Unknown') === key) || null;
         const colour = window._viewer3d._barColour(sampleBar);
         const hex   = (colour >>> 0).toString(16).padStart(6, '0');
         const count = key === 'PRL/PRC Mismatch'
             ? allData.filter(b => b._prlPrcMismatch).length
+            : key === 'Coupler Head'
+            ? 0  // count not available from allData — IFCBEAM entities are not parsed
             : allData.filter(b => !b._prlPrcMismatch && (b.Avonmouth_Layer_Set || b.Bar_Type || 'Unknown') === key).length;
         const label = document.createElement('label');
         label.className = 'viewer-cb-label';

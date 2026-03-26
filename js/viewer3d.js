@@ -19,6 +19,7 @@
  *   LK*        →  Link Bar     → purple
  *   VS/HS      →  Strut Bar    → green
  *   PRL/PRC    →  Preload Bar  → pink
+ *   Coupler Head → gray (IFCBEAM entities not in barMap)
  *   Unknown    →  red
  */
 class Viewer3D {
@@ -204,7 +205,7 @@ class Viewer3D {
             const tMesh = new THREE.Mesh(geo, mat);
             tMesh.userData.expressID = eid;
 
-            const groupKey = (bar && bar._prlPrcMismatch) ? 'PRL/PRC Mismatch' : (bar ? (bar.Avonmouth_Layer_Set || bar.Bar_Type || 'Unknown') : 'Unknown');
+            const groupKey = (bar && bar._prlPrcMismatch) ? 'PRL/PRC Mismatch' : (bar ? (bar.Avonmouth_Layer_Set || bar.Bar_Type || 'Unknown') : 'Coupler Head');
             if (!this.layerGroups.has(groupKey)) {
                 const g = new THREE.Group();
                 g.name = groupKey;
