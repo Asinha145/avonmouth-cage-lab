@@ -363,8 +363,9 @@ function _updateDimBoxesFromBREP(dims) {
     document.getElementById('dim-width').textContent  = fmt(dims.overallWidth);
     document.getElementById('dim-length').textContent = fmt(dims.overallLength);
     document.getElementById('dim-height').textContent = fmt(dims.height);
-    // Re-run EDB auto-fill now that accurate WASM dims are available
+    // Re-run EDB auto-fill and refresh height cards now that accurate WASM dims are available
     autoFillEDBInputs();
+    displayMeshHeightStats();
 }
 
 // ── Viewer placeholder text ────────────────────────────────────────────
@@ -549,7 +550,14 @@ function displayMeshHeightStats() {
         const bars  = layerMap[layer];
         const hBars = bars.filter(b => b.Orientation === 'Horizontal');
         const vBars = bars.filter(b => b.Orientation === 'Vertical');
-        const h     = heightAlongAxis(bars);
+        // Use BREP edbHeight when available (authoritative for bent bars); fall back to text parser
+        const brepH = (_wasm3DDims != null && _wasm3DDims.edbHeight != null) ? _wasm3DDims.edbHeight : null;
+        const h     = brepH != null ? null : heightAlongAxis(bars);
+        const heightVal = brepH != null ? Math.round(brepH) : (h ? Math.round(h.height) : null);
+        const heightStr = heightVal != null ? heightVal.toLocaleString() : '—';
+        const subStr    = brepH != null
+            ? '<span title="BREP geometry — authoritative for bent bars">BREP ✓</span>'
+            : (h ? `↓ ${Math.round(h.min).toLocaleString()} &nbsp;|&nbsp; ↑ ${Math.round(h.max).toLocaleString()}` : '—');
 
         const hSizes = hBars.map(b => b.Size).filter(s => s > 0);
         const hMin   = hSizes.length ? Math.min(...hSizes) : null;
@@ -567,11 +575,9 @@ function displayMeshHeightStats() {
         card.className = 'mesh-stat-card height-card';
         card.innerHTML = `
             <div class="mesh-layer-name">${layer}</div>
-            <div class="mesh-stat-value">${h ? Math.round(h.height).toLocaleString() : '—'}</div>
+            <div class="mesh-stat-value">${heightStr}</div>
             <div class="mesh-stat-label">mm cage height</div>
-            <div class="mesh-stat-sub">
-                ↓ ${h ? Math.round(h.min).toLocaleString() : '—'} &nbsp;|&nbsp; ↑ ${h ? Math.round(h.max).toLocaleString() : '—'}
-            </div>
+            <div class="mesh-stat-sub">${subStr}</div>
             <div class="mesh-dia-row">
                 <span class="mesh-stat-dia dia-horiz" title="Horizontal bars">↔ ${hDia}</span>
                 <span class="mesh-stat-dia dia-vert"  title="Vertical bars">↕ ${vDia}</span>
