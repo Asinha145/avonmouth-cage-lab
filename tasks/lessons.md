@@ -40,6 +40,72 @@ const hgtMm = maxLen([...t1all, ...b1all]); // I36 — T1/B1 bar lengths = cage 
 
 ---
 
+## BREP Height vs Text Parser Height — Bent Bars (March 2026)
+
+**Mistake:** Assumed BREP height < text parser height was physically impossible (barMap mismatch
+causing bbox shrinkage). Concluded the text parser's 5800mm was correct and BREP's 5779mm was wrong.
+
+**What actually happened:** The mesh bars on cage 1704 are Shape Code 26 (Z/S cranked bars) with
+horizontal legs at top and bottom. The text parser computes `End_Z = Start_Z + Dir_Z × Length` —
+treating every bar as if it runs straight for its full cut length. For a 5800mm cut bar with
+horizontal legs of Dim_B=395mm + Dim_C=1100mm, the actual vertical contribution is less than 5800mm.
+The BREP correctly rendered the bent geometry and gave the true outer-face height of 5779mm.
+
+**Rule:** BREP height is authoritative. Trust it over the text parser height when bars have
+shape codes other than 01/21 (straight). The text parser's length-projected height is only
+accurate for perfectly straight bars.
+
+**Diagnostic check:** If `BREP_height < text_parser_height`, check:
+1. Are all bars streamed? (`notStreamed.length === 0` ✓)
+2. Are BREP spans < bar lengths? (yes → bars are bent, BREP is correct)
+3. If BREP height > text parser: something is wrong (barMap mismatch or placement error)
+
+**Key verification for 1704:**
+- All 327 parser bars ARE streamed (notStreamed = 0)
+- Bar 2782: Shape Code 26, Dir_Z=1, Length=5800 → text parser End_Z=33860, BREP top=33839
+- Gap of 21mm = horizontal leg reducing vertical extent
+- BREP 5779mm is the correct cage height
+
+---
+
+## Three-Bbox Dimension Architecture (March 2026)
+
+**Mistake (prior code):** Single `brepBbox` used for all dimensions, with `if (bar && Bar_Type==='Mesh')`
+guard. This caused two problems:
+1. Any bar missing from barMap silently shrank the bbox below the centreline span (impossible physically)
+2. The `allBrepBbox` used `if (bar)` — IFCBEAM coupler entities are not in barMap, so they were
+   excluded from "all bars" bbox
+
+**Rule:** Always maintain three separate bboxes in `StreamAllMeshes`:
+
+| bbox | Gate | Purpose |
+|---|---|---|
+| `meshBbox` | `bar && bar.Bar_Type === 'Mesh'` | EDB length + height (mesh cage body) |
+| `allBarBbox` | `bar` (any type) | EDB width (full cross-section incl. links/struts) |
+| `totalBrepBbox` | None — unconditional | Overall dims + height display (true outer envelope) |
+
+**EDB dimension rules:**
+- `edbWidth` = all bars (links/struts define the real wall cross-section the cage occupies)
+- `edbLength` = mesh bars only (cage length = mesh face extent)
+- `edbHeight` = mesh bars only (cage height = mesh face extent)
+- `height / overallWidth / overallLength` = totalBrepBbox (no barMap dependency)
+
+---
+
+## cageAxisName Must Be Passed to loadIFC() (March 2026)
+
+**Mistake:** `_buildDimensions()` used `Math.min/max(spanX, spanZ)` heuristic to assign length vs
+width. This is brittle for near-square cages and doesn't use the semantic information the parser
+already computed.
+
+**Rule:** Pass `cageAxisName` from `parser.cageAxisName` to `viewer.loadIFC(arrayBuffer, barMap, cageAxisName)`.
+In `_buildDimensions(cageAxisName)`, use `assignLW(spanX, spanY)`:
+- `'X'` → spanX = length, spanY = width
+- `'Y'` → spanY = length, spanX = width
+- `'Z'` → vertical cage, both horizontal → fallback to min/max (still fine for typical rectangular plan)
+
+---
+
 ## Spacing Formula: N bars vs N-1 gaps (March 2026)
 
 **Mistake:** Spacing was computed as `span / N` (treating N as the number of gaps) when it should be `span / (N-1)` (N bars create N-1 gaps between them).

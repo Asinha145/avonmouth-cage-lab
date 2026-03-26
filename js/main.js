@@ -173,7 +173,7 @@ async function processFile() {
                     const arrayBuffer = await readFileAsBuffer(file);
                     const barMap = new Map();
                     allData.forEach(b => barMap.set(parseInt(b._entityId, 10), b));
-                    const dims = await window._viewer3d.loadIFC(arrayBuffer, barMap);
+                    const dims = await window._viewer3d.loadIFC(arrayBuffer, barMap, cageAxisName);
                     if (dims) _updateDimBoxesFromBREP(dims);
                     _buildViewerCheckboxes();
                 } catch (e) {
@@ -910,14 +910,14 @@ function _meshXYSpans() {
 }
 
 function getCageLengthMm() {
-    if (_wasm3DDims) return _wasm3DDims.meshLength;
+    if (_wasm3DDims) return _wasm3DDims.edbLength;
     const s = _meshXYSpans(); return s ? Math.max(s.spanX, s.spanY) : null;
 }
 
-// Mesh-only width — outer-to-outer of mesh bars. Used by cage-sequence Excel.
+// EDB width — outer-to-outer of ALL bar types (mesh + links + struts + preloads).
 function getCageWidthMm() {
-    if (_wasm3DDims) return _wasm3DDims.meshWidth;
-    const s = _meshXYSpans(); return s ? Math.min(s.spanX, s.spanY) : null;
+    if (_wasm3DDims) return _wasm3DDims.edbWidth;
+    const s = _cageXYSpans(); return s ? Math.min(s.spanX, s.spanY) : null;
 }
 
 // Overall width — outer-to-outer of ALL bars (mesh + strut + link + loose).
@@ -1036,7 +1036,7 @@ async function exportEDB(type) {
         }
 
         // H19: production line classification (> 5600mm = Bespoke, else Pallet line)
-        const cageHeightMm = _wasm3DDims ? _wasm3DDims.height : null;
+        const cageHeightMm = _wasm3DDims ? _wasm3DDims.edbHeight : null;
         if (cageHeightMm != null) setVal('H19', cageHeightMm > 5600 ? 'Bespoke' : 'Pallet line');
 
         const cageRef = (document.getElementById('ifc-filename').textContent || 'cage')
@@ -1138,7 +1138,7 @@ async function exportCageReport() {
             .replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 40);
         const widthMm  = getCageWidthMm();
         const lengthMm = getCageLengthMm();
-        const heightMm = _wasm3DDims ? _wasm3DDims.height : null;
+        const heightMm = _wasm3DDims ? _wasm3DDims.edbHeight : null;
         const cageType = detectCageType();
         const wallM    = parseFloat(document.getElementById('edb-wall-thickness').value) || null;
         const totalKg  = allData.reduce((s, b) => s + (b.Weight || 0), 0);
