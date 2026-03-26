@@ -9,9 +9,10 @@ Full autonomous access. No approval prompts needed.
 ---
 
 ## What This Is
-Diagnostic and development viewer for testing web-ifc WASM BREP rendering.
-**NOT a production tool.** Used during development of the Avonmouth DE Tool.
-The techniques here were absorbed into `client/src/components/CageViewer.jsx` in the DE Tool.
+IFC cage 3D viewer + dimension engine using web-ifc WASM BREP geometry.
+Produces EDB-quality cage dimensions (edbWidth, edbLength, edbHeight) and overall cage envelope
+dimensions (height, overallWidth, overallLength) from actual solid geometry — not shape-code
+centreline approximations.
 
 ---
 
@@ -21,7 +22,7 @@ The techniques here were absorbed into `client/src/components/CageViewer.jsx` in
 |---|---|---|
 | Geometry source | BS 8666 shape code → Three.js cylinder approximations | Actual BREP solid geometry via web-ifc WASM |
 | Dimensions | Centreline calculations | Outer-face to outer-face (BREP bounding box) |
-| Purpose | C01 production validation | Development / diagnostics |
+| Purpose | C01 production validation | Dimension engine + 3D viewer |
 
 ---
 
@@ -48,24 +49,63 @@ engine_Z = −IFC_Y / 1000   ← IFC Y becomes Three.js Z (negated)
 | File | Purpose |
 |---|---|
 | `index.html` | Main BREP viewer entry point |
-| `ifc_parser_live.js` | Parser using web-ifc WASM API |
-| `viewer3d_live.js` | Three.js BREP mesh renderer |
-| `web_ifc_live.js` | web-ifc API wrapper / initialiser |
+| `js/ifc-parser.js` | IFC text parser — bar extraction, pset mapping, cage axis detection |
+| `js/viewer3d.js` | Three.js BREP mesh renderer + dimension engine |
+| `js/main.js` | UI controller — wires parser → viewer → EDB export |
+| `test-dims.mjs` | Node: regression test — run before every git push |
 | `diag.html` | Diagnostic UI — load IFC, inspect geometry |
 | `diag_webIFC.mjs` | Node: diagnose web-ifc module loading |
 | `diag_chain.mjs` | Node: diagnose BREP geometry extraction chain |
-| `diag_wasm_path.mjs` | Node: diagnose WASM binary path resolution |
 
 ---
 
+## Dimension System Architecture (`js/viewer3d.js`)
+
+Three bounding boxes are maintained during `StreamAllMeshes`:
+
+| bbox | Populated by | Provides |
+|---|---|---|
+| `meshBbox` | Mesh bars only (`Bar_Type === 'Mesh'`) | `edbLength`, `edbHeight` |
+| `allBarBbox` | All bars in barMap (any type) | `edbWidth` |
+| `totalBrepBbox` | ALL geometry vertices, no barMap gate | `height`, `overallWidth`, `overallLength` |
+
+`_buildDimensions(cageAxisName)` returns:
+
+| Field | Source | Used by |
+|---|---|---|
+| `edbWidth` | allBarBbox — all bars cross-section | Excel/EDB cage width |
+| `edbLength` | meshBbox — mesh cage only | Excel/EDB cage length |
+| `edbHeight` | meshBbox — mesh cage only | Excel/EDB cage height + pallet/bespoke (H19) |
+| `height` | totalBrepBbox | Website display |
+| `overallWidth` | totalBrepBbox | Website display |
+| `overallLength` | totalBrepBbox | Website display |
+
+`cageAxisName` ('X'/'Y'/'Z' from `parser.cageAxisName`) is passed to `loadIFC()` and used
+to definitively assign length vs width axes — no brittle min/max heuristic.
+
+### Why totalBrepBbox (not allBarBbox) for overall dims
+`allBarBbox` has a `if (bar)` gate — IFCBEAM coupler entities are not in barMap and would be
+excluded. `totalBrepBbox` has zero barMap dependency so it always gives the true outer envelope
+including couplers.
+
+### BREP height vs text parser height
+**BREP is more accurate for bent bars.** The text parser computes `End_Z = Start_Z + Dir_Z × Length`,
+treating every bar as straight. For bent bars (e.g. Shape Code 26 Z-bars), the horizontal legs
+reduce the actual vertical contribution. The BREP correctly renders the bent geometry and gives
+the true outer-face cage height.
+
+Example: 1704 cage (2HD70730AC2):
+- Text parser: 5800mm (bar cut length projected along Z — OVERESTIMATES for bent bars)
+- BREP: 5779mm (actual outer-face geometry — CORRECT)
+
 ## Confirmed BREP Dimensions (Ground Truth)
 
-| File | Bars | Width | Height | Length |
-|---|---|---|---|---|
-| `2HD70730AC1.ifc` | 332 | 600 mm | 3,500 mm | 7,900 mm |
-| `P7019_C1.ifc` | 990 | 1,300 mm | 5,300 mm | 11,300 mm |
+| File | edbWidth | edbLength | edbHeight | height (total) | overallLength (total) |
+|---|---|---|---|---|---|
+| `P7019_C1.ifc` | 1,389 mm | 11,082 mm | 5,080 mm | 5,311 mm | 11,282 mm |
+| `2HD70730AC2.ifc` (1704) | 439 mm | 6,500 mm | 5,779 mm | 5,779 mm | 6,665 mm |
 
-These are outer-face-to-outer-face measurements from BREP. The ifc-cage-viewer gives centreline values.
+`total` dims include IFCBEAM couplers. EDB dims are rebar only.
 
 ---
 

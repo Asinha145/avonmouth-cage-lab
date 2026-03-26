@@ -34,10 +34,12 @@ class Viewer3D {
         // Map: expressID (int) → THREE.Mesh  (for click/highlight later)
         this.meshByExpId = new Map();
 
-        // Bounding box of MESH bars only — used for mesh-only dims (Excel/EDB)
-        this.brepBbox = null;
-        // Bounding box of ALL bars — used for overall width display on website
-        this.allBrepBbox = null;
+        // meshBbox: mesh bars only (Bar_Type==='Mesh') — EDB length & height
+        this.meshBbox = null;
+        // allBarBbox: all bars in barMap (any type) — EDB width
+        this.allBarBbox = null;
+        // totalBrepBbox: ALL geometry, no barMap dependency — overall cage envelope
+        this.totalBrepBbox = null;
 
         // Orbit state
         this._orbit = {
@@ -99,8 +101,10 @@ class Viewer3D {
     /**
      * @param {ArrayBuffer} arrayBuffer  — raw IFC file bytes
      * @param {Map<number, Object>} barMap — Map<expressID, bar> from parser
+     * @param {string} [cageAxisName='Z'] — cage long axis from parser ('X'|'Y'|'Z')
+     *   Used to assign meshLength vs meshWidth without relying on a min/max heuristic.
      */
-    async loadIFC(arrayBuffer, barMap) {
+    async loadIFC(arrayBuffer, barMap, cageAxisName = 'Z') {
         // Clear previous scene geometry (keep lights)
         const lights = [];
         this.scene.traverse(o => { if (o.isLight) lights.push(o); });
@@ -110,16 +114,18 @@ class Viewer3D {
         this.meshByExpId.clear();
 
         // Reset bboxes
-        this.brepBbox = {
+        const _emptyBbox = () => ({
             minX: Infinity, maxX: -Infinity,
             minY: Infinity, maxY: -Infinity,
             minZ: Infinity, maxZ: -Infinity,
-        };
-        this.allBrepBbox = {
-            minX: Infinity, maxX: -Infinity,
-            minY: Infinity, maxY: -Infinity,
-            minZ: Infinity, maxZ: -Infinity,
-        };
+        });
+        // meshBbox: mesh bars only — EDB length & height (mesh cage body)
+        this.meshBbox = _emptyBbox();
+        // allBarBbox: all bars in barMap (any Bar_Type) — EDB width (full cage cross-section)
+        this.allBarBbox = _emptyBbox();
+        // totalBrepBbox: ALL geometry, no barMap dependency (incl. IFCBEAM couplers)
+        //   → overall height / width / length for website display
+        this.totalBrepBbox = _emptyBbox();
 
         const data    = new Uint8Array(arrayBuffer);
         const modelID = this.ifcapi.OpenModel(data);
@@ -158,23 +164,26 @@ class Viewer3D {
                     allPos.push(wx, wy, wz);
                     allNrm.push(wnx, wny, wnz);
 
-                    // Mesh-only bbox — used for Excel/EDB dimensions (outer-to-outer of mesh cage)
-                    if (bar && (bar.Bar_Type === 'Mesh')) {
-                        if (wx < this.brepBbox.minX) this.brepBbox.minX = wx;
-                        if (wx > this.brepBbox.maxX) this.brepBbox.maxX = wx;
-                        if (wy < this.brepBbox.minY) this.brepBbox.minY = wy;
-                        if (wy > this.brepBbox.maxY) this.brepBbox.maxY = wy;
-                        if (wz < this.brepBbox.minZ) this.brepBbox.minZ = wz;
-                        if (wz > this.brepBbox.maxZ) this.brepBbox.maxZ = wz;
-                    }
-                    // All-bars bbox — used for overall width/length display on the website
+                    // Total bbox — ALL vertices, no barMap dependency (includes IFCBEAM couplers)
+                    const t = this.totalBrepBbox;
+                    if (wx < t.minX) t.minX = wx;  if (wx > t.maxX) t.maxX = wx;
+                    if (wy < t.minY) t.minY = wy;  if (wy > t.maxY) t.maxY = wy;
+                    if (wz < t.minZ) t.minZ = wz;  if (wz > t.maxZ) t.maxZ = wz;
+
                     if (bar) {
-                        if (wx < this.allBrepBbox.minX) this.allBrepBbox.minX = wx;
-                        if (wx > this.allBrepBbox.maxX) this.allBrepBbox.maxX = wx;
-                        if (wy < this.allBrepBbox.minY) this.allBrepBbox.minY = wy;
-                        if (wy > this.allBrepBbox.maxY) this.allBrepBbox.maxY = wy;
-                        if (wz < this.allBrepBbox.minZ) this.allBrepBbox.minZ = wz;
-                        if (wz > this.allBrepBbox.maxZ) this.allBrepBbox.maxZ = wz;
+                        // All-bar bbox — EDB width (full cross-section incl. links, struts, preloads)
+                        const ab = this.allBarBbox;
+                        if (wx < ab.minX) ab.minX = wx;  if (wx > ab.maxX) ab.maxX = wx;
+                        if (wy < ab.minY) ab.minY = wy;  if (wy > ab.maxY) ab.maxY = wy;
+                        if (wz < ab.minZ) ab.minZ = wz;  if (wz > ab.maxZ) ab.maxZ = wz;
+
+                        // Mesh-only bbox — EDB length & height (mesh cage body only)
+                        if (bar.Bar_Type === 'Mesh') {
+                            const mb = this.meshBbox;
+                            if (wx < mb.minX) mb.minX = wx;  if (wx > mb.maxX) mb.maxX = wx;
+                            if (wy < mb.minY) mb.minY = wy;  if (wy > mb.maxY) mb.maxY = wy;
+                            if (wz < mb.minZ) mb.minZ = wz;  if (wz > mb.maxZ) mb.maxZ = wz;
+                        }
                     }
                 }
 
@@ -208,48 +217,82 @@ class Viewer3D {
         });
 
         this.ifcapi.CloseModel(modelID);
-        console.log(`[Viewer3D] Loaded ${barCount} bars, ${geomCount} geometry chunks`);
+        const tb = this.totalBrepBbox;
+        const _h = (tb.minY === Infinity) ? '?' : Math.round((tb.maxY - tb.minY) * 1000);
+        const _x = (tb.minX === Infinity) ? '?' : Math.round((tb.maxX - tb.minX) * 1000);
+        const _z = (tb.minZ === Infinity) ? '?' : Math.round((tb.maxZ - tb.minZ) * 1000);
+        console.log(`[Viewer3D] ${barCount} bars | ${geomCount} geometry chunks | totalBbox: IFC-X=${_x}mm IFC-Z(height)=${_h}mm IFC-Y=${_z}mm | cageAxis=${cageAxisName}`);
 
         // Hide placeholder text once geometry is in the scene
         const ph = document.getElementById('viewer-placeholder');
         if (ph) ph.style.display = 'none';
 
         this._fitCamera();
-        return this._buildDimensions();
+        return this._buildDimensions(cageAxisName);
     }
 
-    // ── Dimensions from BREP bbox (IFC mm) ──────────────────────────────
+    // ── Dimensions from BREP bboxes (IFC mm) ────────────────────────────
     /**
-     * web-ifc coords (metres, Y-up):
-     *   wx → IFC X direction  → * 1000 mm
-     *   wy → IFC Z direction  → * 1000 mm  (height for Z-up cage)
-     *   wz → IFC -Y direction → * 1000 mm  (negate doesn't affect span)
+     * web-ifc coordinate mapping (metres, Y-up):
+     *   wx → IFC X / 1000
+     *   wy → IFC Z / 1000  ← vertical axis, always height regardless of cageAxisName
+     *   wz → -IFC Y / 1000 ← span magnitude = IFC Y span
      *
-     * Returns { width, length, height } in mm rounded to nearest mm.
-     * "height" = IFC Z span (vertical).
-     * "width"  = smaller of IFC X / IFC Y span (cross section).
-     * "length" = larger of IFC X / IFC Y span (cage long axis).
+     * cageAxisName ('X'|'Y'|'Z') — cage long axis from parser:
+     *   'X' → long axis is IFC X → spanX = length, spanY = width
+     *   'Y' → long axis is IFC Y → spanY = length, spanX = width
+     *   'Z' → cage is vertical (typical wall cage) → min/max heuristic for L/W
+     *
+     * Returns (all mm, rounded to nearest mm):
+     *   edbWidth   — all bars (allBarBbox): full cage cross-section for EDB
+     *   edbLength  — mesh bars only (meshBbox): cage length for EDB
+     *   edbHeight  — mesh bars only (meshBbox): cage height for EDB + pallet/bespoke
+     *   height     — all geometry (totalBrepBbox): overall height for website display
+     *   overallWidth  — all geometry (totalBrepBbox): overall width for website display
+     *   overallLength — all geometry (totalBrepBbox): overall length for website display
      */
-    _buildDimensions() {
-        const b = this.brepBbox;
-        if (b.minX === Infinity) return null;
+    _buildDimensions(cageAxisName = 'Z') {
+        const t = this.totalBrepBbox;
+        if (t.minX === Infinity) return null;
 
-        const spanX = (b.maxX - b.minX) * 1000; // IFC X mm
-        const spanY = (b.maxY - b.minY) * 1000; // IFC Z mm (height)
-        const spanZ = (b.maxZ - b.minZ) * 1000; // IFC Y mm
+        // Helper: assign length/width from two horizontal spans using cageAxisName
+        const assignLW = (spanX, spanY) => {
+            if (cageAxisName === 'X') return { L: spanX, W: spanY };
+            if (cageAxisName === 'Y') return { L: spanY, W: spanX };
+            return { L: Math.max(spanX, spanY), W: Math.min(spanX, spanY) };
+        };
 
-        const height     = Math.round(spanY);
-        const meshWidth  = Math.round(Math.min(spanX, spanZ)); // mesh outer-to-outer (Excel/EDB)
-        const meshLength = Math.round(Math.max(spanX, spanZ));
+        // Overall dims — totalBrepBbox (all geometry, no barMap dependency)
+        const tSpanX = (t.maxX - t.minX) * 1000;
+        const tSpanY = (t.maxZ - t.minZ) * 1000;
+        const { L: overallL, W: overallW } = assignLW(tSpanX, tSpanY);
 
-        // Overall dims from all bars (website display)
-        const ab = this.allBrepBbox;
-        const aSpanX = (ab.maxX - ab.minX) * 1000;
-        const aSpanZ = (ab.maxZ - ab.minZ) * 1000;
-        const overallWidth  = Math.round(Math.min(aSpanX, aSpanZ));
-        const overallLength = Math.round(Math.max(aSpanX, aSpanZ));
+        // EDB width — allBarBbox (all IFCREINFORCINGBAR types, excludes IFCBEAM couplers)
+        const ab = this.allBarBbox;
+        const hasAllBar = ab.minX !== Infinity;
+        const abSpanX = hasAllBar ? (ab.maxX - ab.minX) * 1000 : null;
+        const abSpanY = hasAllBar ? (ab.maxZ - ab.minZ) * 1000 : null;
+        const edbWidth = hasAllBar ? Math.round(assignLW(abSpanX, abSpanY).W) : null;
 
-        return { meshWidth, meshLength, height, overallWidth, overallLength };
+        // EDB length & height — meshBbox (mesh bars only)
+        const mb = this.meshBbox;
+        const hasMesh = mb.minX !== Infinity;
+        let edbLength = null, edbHeight = null;
+        if (hasMesh) {
+            const mbSpanX = (mb.maxX - mb.minX) * 1000;
+            const mbSpanY = (mb.maxZ - mb.minZ) * 1000;
+            edbLength = Math.round(assignLW(mbSpanX, mbSpanY).L);
+            edbHeight = Math.round((mb.maxY - mb.minY) * 1000);
+        }
+
+        return {
+            edbWidth,                              // all bars — EDB cross-section width
+            edbLength,                             // mesh only — EDB cage length
+            edbHeight,                             // mesh only — EDB cage height / pallet classification
+            height:       Math.round((t.maxY - t.minY) * 1000), // all geometry — website display
+            overallWidth:  Math.round(overallW),   // all geometry — website display
+            overallLength: Math.round(overallL),   // all geometry — website display
+        };
     }
 
     // ── Layer visibility toggle ──────────────────────────────────────────
