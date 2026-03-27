@@ -962,8 +962,9 @@ IFCParser.prototype.extractSlabData = function(bars) {
     // I36: cage height = T1/B1 bars run along the height dimension → their bar length = cage height
     const hgtMm = maxLen([...t1all, ...b1all]);
 
-    const meshWt  = meshBars.reduce((s, b) => s + (b.Formula_Weight || 0), 0);
-    const totalWt = bars.reduce((s, b) => s + (b.Formula_Weight || 0), 0);
+    const bw      = b => b.Weight ?? b.Formula_Weight ?? 0;
+    const meshWt  = meshBars.reduce((s, b) => s + bw(b), 0);
+    const totalWt = bars.reduce((s, b) => s + bw(b), 0);
 
     return {
         cageLength : +(lenMm  / 1000).toFixed(2),
