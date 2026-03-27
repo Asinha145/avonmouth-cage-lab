@@ -106,6 +106,13 @@ WASM served from `lib/` — works fine as static file from GitHub CDN.
 
 ---
 
+## Output Spec
+
+`tasks/output-spec.md` is the contract for every output field in this project.
+Read it before touching any output-producing code. Update it before implementing spec changes.
+
+---
+
 ## Do Not
 
 - Commit `templates/*.xlsm` / `*.xlsx` — gitignored, proprietary
