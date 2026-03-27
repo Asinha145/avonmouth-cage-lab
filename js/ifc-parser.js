@@ -96,9 +96,10 @@ class IFCParser {
         this.parseShapeCodes(bars);      // ← split Shape_Code into base + coupler suffix
         this.detectBarShapes(bars);
         this.computeRejectionStatus(bars);
+        this.couplerMap = this.extractCouplerHeads(lines);
 
         console.log(`Cage axis: ${this.cageAxisName} | Rejected: ${this.isRejected} (unknown=${this.unknownCount}, dups=${this.duplicateCount})`);
-        console.log(`Done – ${bars.length} bars`);
+        console.log(`Done – ${bars.length} bars, ${this.couplerMap.size} coupler heads`);
         return bars;
     }
 
@@ -248,12 +249,56 @@ class IFCParser {
                 else if (/^dim[_\s]a$/i.test(n)) { bar.Dim_A = parseFloat(v) || null; }
                 else if (/^dim[_\s]b$/i.test(n)) { bar.Dim_B = parseFloat(v) || null; }
                 else if (/^dim[_\s]c$/i.test(n)) { bar.Dim_C = parseFloat(v) || null; }
+                // ── Coupler head weight (IFCBEAM ATK Couplers Parts pset)
+                else if (nl === 'coupler weight') {
+                    const w = parseFloat(v);
+                    if (w > 0) bar.Coupler_Weight = w;
+                }
+                // ── ATK Couplers Parts layer name (IFCBEAM — same format as ATK_Layer_Name on rebars)
+                else if (nl === 'layer name' && psetName === 'ATK Couplers Parts' && !bar.ATK_Layer_Name) {
+                    bar.ATK_Layer_Name = v;
+                }
             });
         });
         // Normalise blank Avonmouth layer to null
         if (bar.Avonmouth_Layer_Set === '') bar.Avonmouth_Layer_Set = null;
         // Last-resort layer name: use the IFCREINFORCINGBAR Name field if no vendor pset supplied one.
         if (!bar.ATK_Layer_Name && bar.Name) bar.ATK_Layer_Name = bar.Name;
+    }
+
+    // ── IFCBEAM coupler head extraction ───────────────────────────────
+    /**
+     * Extracts IFCBEAM coupler head entities and their Avonmouth layer + weight.
+     * Returns Map<expressID (int), { eid, layer, atkLayerName, weight }>
+     *
+     * IFCBEAM entities carry the same Avonmouth pset as their rebar:
+     *   Avonmouth.Layer/Set → e.g. 'F1A'
+     *   ATK Couplers Parts.Coupler weight → e.g. 1.76 (kg)
+     */
+    extractCouplerHeads(lines) {
+        const couplerMap = new Map();
+        lines.forEach(line => {
+            if (!line.includes('IFCBEAM')) return;
+            const m = line.match(/^#(\d+)\s*=\s*IFCBEAM\('([^']+)'/);
+            if (!m) return;
+            const obj = {
+                _entityId          : m[1],
+                GlobalId           : m[2],
+                Name               : '',
+                Avonmouth_Layer_Set: null,
+                ATK_Layer_Name     : null,
+                Coupler_Weight     : null,
+            };
+            this.extractProperties(m[1], obj);
+            couplerMap.set(parseInt(m[1], 10), {
+                eid          : m[1],
+                globalId     : m[2],
+                layer        : obj.Avonmouth_Layer_Set,
+                atkLayerName : obj.ATK_Layer_Name,
+                weight       : obj.Coupler_Weight,
+            });
+        });
+        return couplerMap;
     }
 
     // ── Position resolution ────────────────────────────────────────────
