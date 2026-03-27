@@ -17,6 +17,19 @@
 
 let allData      = [];
 let _couplerMap  = new Map(); // IFCBEAM coupler heads: Map<expressID, { layer, weight, ... }>
+
+// Returns coupler weights (kg) split by whether the coupler's layer is a mesh face layer.
+// mesh    = couplers on F*A / N*A / B*A / T*A layers (part of the mesh assembly)
+// nonMesh = couplers on all other layers (PRL, PRC, VS, HS, etc.)
+function _getCouplerWeightsByType() {
+    let mesh = 0, nonMesh = 0;
+    _couplerMap.forEach(c => {
+        if (!c.weight) return;
+        if (c.layer && /^[FNBTfnbt]\d+A$/i.test(c.layer)) mesh    += c.weight;
+        else                                                nonMesh += c.weight;
+    });
+    return { mesh, nonMesh, total: mesh + nonMesh };
+}
 let filteredData = [];
 let cageAxis     = [0, 0, 1];
 let cageAxisName = 'Z';
@@ -266,8 +279,9 @@ function displayResults(parser) {
     const nonMeshBars = allData.filter(b => b.Bar_Type !== 'Mesh' && b.Bar_Type !== 'Unknown');
     const w     = b => b.Weight || 0;
     const fw    = b => b.Formula_Weight || 0;
-    const meshFW    = meshBars.reduce((s, b) => s + fw(b), 0);
-    const nonMeshFW = nonMeshBars.reduce((s, b) => s + fw(b), 0);
+    const cplW      = _getCouplerWeightsByType();
+    const meshFW    = meshBars.reduce((s, b) => s + fw(b), 0) + cplW.mesh;
+    const nonMeshFW = nonMeshBars.reduce((s, b) => s + fw(b), 0) + cplW.nonMesh;
     const udl = meshFW > 0 ? nonMeshFW / meshFW : 0;
 
     const guidCounts = new Map();
@@ -1001,11 +1015,12 @@ async function exportEDB(type) {
     const wallM  = parseFloat(document.getElementById('edb-wall-thickness').value);
     if (isNaN(wallM) || wallM <= 0) { alert('Wall thickness missing — analyse a cage first.'); return; }
 
-    // UDL: round UP to 2 decimal places
+    // UDL: round UP to 2 decimal places (includes IFCBEAM coupler head weights)
     const meshBars     = allData.filter(b => b.Bar_Type === 'Mesh');
     const nonMeshBars  = allData.filter(b => b.Bar_Type !== 'Mesh' && b.Bar_Type !== 'Unknown');
-    const meshW        = meshBars.reduce((s, b) => s + (b.Weight || 0), 0);
-    const nonMeshW     = nonMeshBars.reduce((s, b) => s + (b.Weight || 0), 0);
+    const edbCplW      = _getCouplerWeightsByType();
+    const meshW        = meshBars.reduce((s, b) => s + (b.Weight || 0), 0) + edbCplW.mesh;
+    const nonMeshW     = nonMeshBars.reduce((s, b) => s + (b.Weight || 0), 0) + edbCplW.nonMesh;
     const udl          = meshW > 0 ? Math.ceil((nonMeshW / meshW) * 100) / 100 : 0;
 
     const layerStats = computeLayerStatsForEDB();
@@ -1115,9 +1130,11 @@ async function exportSlabEDB() {
         if (!ws) throw new Error('Sheet "INPUT SPAN RESULTS" not found in slab template');
 
         const set = (col, val) => { if (val != null) ws.cell(`${col}36`).value(val); };
+        // Add IFCBEAM coupler head weights (kg → tonnes) to totals
+        const slabCplW = _getCouplerWeightsByType();
         set('H', sd.cageLength);
         set('I', sd.cageHeight);
-        set('J', sd.totalWeight);
+        set('J', +(sd.totalWeight + slabCplW.total / 1000).toFixed(3));
         set('N', sd.t1Dia);
         set('O', sd.t1Spacing);
         set('P', sd.t2Dia);
@@ -1128,7 +1145,7 @@ async function exportSlabEDB() {
         set('V', sd.b2Dia);
         set('W', sd.b2Spacing);
         set('X', sd.b2Count);
-        set('Z', sd.meshWeight);
+        set('Z', +(sd.meshWeight + slabCplW.mesh / 1000).toFixed(3));
 
         // H42: production line classification (> 5600mm = Bespoke, else Pallet line)
         if (sd.cageHeight != null) ws.cell('H42').value(sd.cageHeight > 5600 ? 'Bespoke' : 'Pallet line');
