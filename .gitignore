@@ -1,1 +1,6 @@
 node_modules/
+
+# EDB templates — proprietary, not public
+templates/*.xlsm
+templates/*.xlsx
+templates/*.xls

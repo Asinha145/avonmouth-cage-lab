@@ -1,235 +1,133 @@
-# Avonmouth Cage BREP Viewer v2 — Claude Context
+# Avonmouth Cage Lab — Claude Context
 
 ## Permissions
 Full autonomous access. No approval prompts needed.
 
-## Workspace Overview
-→ See `C:/Users/ashis/avonmouth/CLAUDE.md` for the full project map and how this tool fits in.
-
 ---
 
 ## What This Is
-IFC cage 3D viewer + dimension engine using web-ifc WASM BREP geometry.
-Produces EDB-quality cage dimensions (edbWidth, edbLength, edbHeight) and overall cage envelope
-dimensions (height, overallWidth, overallLength) from actual solid geometry — not shape-code
-centreline approximations.
+
+**Experimental clone of `avonmouth-cage-v2` (ifc-rebar-analyzer-v2).**
+
+This repo is a public sandbox for two specific workstreams:
+1. **Coupler geometry investigation** — understanding how IFCBEAM coupler head geometry drives
+   through-bar End_Y beyond the F1A face (the ~808mm issue documented in `tasks/pop.md`)
+2. **EDB template making** — developing and testing new EDB export templates before merging
+   them back into the locked cage-v2 repo
+
+**When work is finalised here → cherry-pick / merge the relevant commits into `avonmouth-cage-v2` only.**
+Do not merge wholesale. Identify the specific commits or diffs that implement the feature, and port those only.
 
 ---
 
-## Key Difference from ifc-cage-viewer
+## Source Repo
 
-| | ifc-cage-viewer | avonmouth-cage-v2 |
-|---|---|---|
-| Geometry source | BS 8666 shape code → Three.js cylinder approximations | Actual BREP solid geometry via web-ifc WASM |
-| Dimensions | Centreline calculations | Outer-face to outer-face (BREP bounding box) |
-| Purpose | C01 production validation | Dimension engine + 3D viewer |
+| Field | Value |
+|---|---|
+| Locked source | `C:/Users/ashis/avonmouth-cage-v2/` — `ifc-rebar-analyzer-v2` |
+| This lab | `C:/Users/ashis/avonmouth-cage-lab-local/` — `avonmouth-cage-lab` |
+| Hosted at | https://asinha145.github.io/avonmouth-cage-lab/ (GitHub Pages, root of main) |
 
 ---
 
-## Tech Stack
+## EDB Templates — NOT PUBLIC
+
+`templates/*.xlsm` and `templates/*.xlsx` are **gitignored** and will never be committed here.
+
+- The EDB download buttons in the UI will still appear but **will 404** — this is intentional.
+- Do not attempt to commit, work around, or stub out the EDB files.
+- All EDB template work is done locally in this folder and only the code changes (JS side) are committed.
+
+---
+
+## Relationship to Locked cage-v2
+
+```
+avonmouth-cage-v2 (locked, private EDB)
+        │
+        └── cloned → avonmouth-cage-lab (public, no EDB files)
+                            │
+                            ├── Coupler geometry investigation
+                            ├── EDB template prototyping (local only)
+                            └── Merged back → avonmouth-cage-v2 when finalised
+```
+
+**Rule: cage-v2 is the source of truth.** This lab diverges intentionally for experimentation.
+Never assume cage-lab is up to date — always check the cage-v2 commit hash before merging back.
+
+---
+
+## Active Workstreams
+
+### 1. Coupler Geometry Investigation (`tasks/pop.md`)
+
+**Problem:** 9 VS2 bars (Dir_Y=1.0) have `Start_Y` inside the N1A zone but `End_Y` at ~808mm
+(far beyond F1A at 346mm). The ~460mm overshoot is the IFCBEAM coupler head entity on the F1A
+face driving the bar's IFC placement origin to the coupler's far end.
+
+**Goals:**
+- Identify which IFC entity / property drives `End_Y` to ~808mm
+- Determine whether `End_Y` should be clamped to bar body length or read from a different pset
+- Cross-check BREP geometry: bar body length vs coupler entity extent
+- Implement the outside-zone detection fix
+
+**Detection fix (to implement):**
+```javascript
+// Correct outside check — use either end, not just Start_Y
+const maxY = Math.max(b.Start_Y ?? -Infinity, b.End_Y ?? -Infinity);
+const minY = Math.min(b.Start_Y ?? Infinity,  b.End_Y ?? Infinity);
+const outside = minY < N1A_ABS_MIN || maxY > F1A_ABS_MAX;
+```
+
+### 2. EDB Template Making
+
+- Templates live in `templates/` locally but are gitignored
+- Work involves testing new template structures against live IFC files
+- Finalised template code changes (JS side only) get merged back to cage-v2
+
+---
+
+## Merge-Back Protocol (to cage-v2)
+
+When a feature is ready to port back:
+
+1. `git log --oneline` in this repo — identify the exact commits for the feature
+2. In cage-v2: `git cherry-pick <commit-hash>` (or manual diff for complex changes)
+3. Run `node test-dims.mjs` in cage-v2 to confirm regressions are zero
+4. Commit and push cage-v2
+5. Update `tasks/lessons.md` in cage-v2 if new patterns were discovered
+
+---
+
+## GitHub Pages
+
+Site served from root of `main` branch — no build step.
+WASM served from `lib/` — works fine as static file from GitHub CDN.
+
+---
+
+## Do Not
+
+- Commit `templates/*.xlsm` / `*.xlsx` — gitignored, proprietary
+- Merge cage-lab wholesale into cage-v2 — cherry-pick only
+- Install additional npm packages (intentionally dependency-light)
+- Stub out or work around the 404 on EDB download buttons
+
+---
+
+## Tech Stack (inherited from cage-v2)
+
 - **web-ifc v0.0.77** (`lib/web-ifc-api-iife.js` + `lib/web-ifc.wasm`)
 - Vanilla JS, no build step, browser-only
 - Three.js via CDN
-- Node.js `.mjs` diagnostic scripts (run locally for debugging)
-
----
-
-## Coordinate Conversion (web-ifc → Three.js)
-IFC is mm Z-up. web-ifc converts to metres Y-up:
-```
-engine_X =  IFC_X / 1000
-engine_Y =  IFC_Z / 1000   ← IFC Z becomes Three.js Y
-engine_Z = −IFC_Y / 1000   ← IFC Y becomes Three.js Z (negated)
-```
-
----
 
 ## Key Files
 
 | File | Purpose |
 |---|---|
-| `index.html` | Main BREP viewer entry point |
-| `js/ifc-parser.js` | IFC text parser — bar extraction, pset mapping, cage axis detection |
-| `js/viewer3d.js` | Three.js BREP mesh renderer + dimension engine |
+| `index.html` | Main entry point |
+| `js/ifc-parser.js` | IFC text parser — bar extraction, pset mapping, coupler heads |
+| `js/viewer3d.js` | Three.js BREP renderer + dimension engine |
 | `js/main.js` | UI controller — wires parser → viewer → EDB export |
-| `test-dims.mjs` | Node: regression test — run before every git push |
-| `diag.html` | Diagnostic UI — load IFC, inspect geometry |
-| `diag_webIFC.mjs` | Node: diagnose web-ifc module loading |
-| `diag_chain.mjs` | Node: diagnose BREP geometry extraction chain |
-
----
-
-## Dimension System Architecture (`js/viewer3d.js`)
-
-Three bounding boxes are maintained during `StreamAllMeshes`:
-
-| bbox | Populated by | Provides |
-|---|---|---|
-| `meshBbox` | Mesh bars only (`Bar_Type === 'Mesh'`) | `edbLength`, `edbHeight` |
-| `allBarBbox` | All bars in barMap (any type) | `edbWidth` |
-| `totalBrepBbox` | ALL geometry vertices, no barMap gate | `height`, `overallWidth`, `overallLength` |
-
-`_buildDimensions(cageAxisName)` returns:
-
-| Field | Source | Used by |
-|---|---|---|
-| `edbWidth` | allBarBbox — all bars cross-section | Excel/EDB cage width |
-| `edbLength` | meshBbox — mesh cage only | Excel/EDB cage length |
-| `edbHeight` | meshBbox — mesh cage only | Excel/EDB cage height + pallet/bespoke (H19) |
-| `height` | totalBrepBbox | Website display |
-| `overallWidth` | totalBrepBbox | Website display |
-| `overallLength` | totalBrepBbox | Website display |
-
-`cageAxisName` ('X'/'Y'/'Z' from `parser.cageAxisName`) is passed to `loadIFC()` and used
-to definitively assign length vs width axes — no brittle min/max heuristic.
-
-### Why totalBrepBbox (not allBarBbox) for overall dims
-`allBarBbox` has a `if (bar)` gate — IFCBEAM coupler entities are not in barMap and would be
-excluded. `totalBrepBbox` has zero barMap dependency so it always gives the true outer envelope
-including couplers.
-
-### BREP height vs text parser height
-**BREP is more accurate for bent bars.** The text parser computes `End_Z = Start_Z + Dir_Z × Length`,
-treating every bar as straight. For bent bars (e.g. Shape Code 26 Z-bars), the horizontal legs
-reduce the actual vertical contribution. The BREP correctly renders the bent geometry and gives
-the true outer-face cage height.
-
-Example: 1704 cage (2HD70730AC2):
-- Text parser: 5800mm (bar cut length projected along Z — OVERESTIMATES for bent bars)
-- BREP: 5779mm (actual outer-face geometry — CORRECT)
-
-## Confirmed BREP Dimensions (Ground Truth)
-
-| File | edbWidth | edbLength | edbHeight | height (total) | overallLength (total) |
-|---|---|---|---|---|---|
-| `P7019_C1.ifc` | 1,389 mm | 11,082 mm | 5,080 mm | 5,311 mm | 11,282 mm |
-| `2HD70730AC2.ifc` (1704) | 439 mm | 6,500 mm | 5,779 mm | 5,779 mm | 6,665 mm |
-
-`total` dims include IFCBEAM couplers. EDB dims are rebar only.
-
----
-
-## IFCBEAM Coupler Head System
-
-IFCBEAM entities are coupler heads attached to the ends of rebars at F1A/N1A faces.
-
-### What the parser extracts (`extractCouplerHeads()`)
-- Entity type: `IFCBEAM`
-- Reads same psets as rebars via `extractProperties()`
-- Key fields extracted:
-  - `layer` — from `Avonmouth.Layer/Set` pset (e.g. 'F1A', 'N1A', 'VS1')
-  - `weight` — from `ATK Couplers Parts.Coupler weight` (kg, IFCMASSMEASURE)
-  - `globalId`, `eid`
-- Stored in `IFCParser.couplerMap` (Map of eid → coupler object)
-
-### Layer assignment
-IFCBEAM entities carry their own `Avonmouth.Layer/Set` — same pset as their parent rebar.
-No need to look up the parent rebar. The layer on the IFCBEAM is authoritative.
-
-### 3D Viewer (`viewer3d.js`)
-- `couplerMap` passed to `loadIFC(arrayBuffer, barMap, cageAxisName, couplerMap)`
-- In `StreamAllMeshes`: if `barMap.get(eid)` is null → check `couplerMap.get(eid)`
-- `groupKey` = `coupler.layer || 'Coupler Head'`
-- Colour = same as that layer's mesh bars (not gray)
-- Previously these appeared as 'Unknown' — now correctly grouped with parent layer
-
-### Weight accounting
-- `_getCouplerWeightsByType()` in `main.js` splits coupler weights:
-  - **mesh** = layers matching `/^[FNBTfnbt]\d+A$/i` (F1A, N1A, T1A, B1A)
-  - **nonMesh** = all others (PRL, PRC, VS, HS, etc.)
-- Coupler weights are added to:
-  - UDL display (website) — mesh + non-mesh combined into total cage weight
-  - Layer weight table — each layer shows `bar weight + coupler weight` with `+X.XX cpls` note
-  - Wall cage EDB C33/C37 — UDL mesh and non-mesh include respective coupler weights
-  - Slab EDB J36 — total weight includes all coupler heads
-  - Slab EDB Z36 — mesh weight includes mesh-layer coupler heads
-
-### Known limitation — through-bars (documented in `tasks/pop.md`)
-9 VS2 bars (Dir_Y=1.0) have Start_Y inside N1A zone but End_Y at ~808mm (far beyond F1A).
-Root cause: the IFCBEAM coupler head on the F1A face drives the parser's End_Y to ~808mm.
-Detection fix (not yet implemented): use `max(Start_Y, End_Y) > F1A_ABS_MAX` for outside check.
-
----
-
-## Running Diagnostics
-```bash
-# From this folder — diagnose why web-ifc WASM fails to load
-node diag_webIFC.mjs
-
-# Trace the geometry extraction pipeline
-node diag_chain.mjs path/to/cage.ifc
-
-# Check WASM binary path resolution
-node diag_wasm_path.mjs
-```
-
----
-
-## Relationship to Other Projects
-- `ifc-cage-viewer` → C01 validation (separate, do not merge)
-- `avonmouth-de-tool` → absorbed these BREP techniques into `CageViewer.jsx`
-- This folder is safe to use for isolated WASM experiments without affecting production code
-
----
-
----
-
-## Slab Cage Support (T1A / B1A)
-
-Slab cages have only T1A and B1A mesh layers (no F1A / N1A). Detected by `IFCParser.isSlabCage(bars)`.
-
-### ATK_Layer_Name roles for slab cages
-
-| ATK_Layer_Name | Mesh Face | Physical role | Runs along |
-|---|---|---|---|
-| T1 / T1-CPLR | T1A | **Height**-direction bars | cage height axis |
-| T2 / T2-CPLR | T1A | **Length**-direction bars | cage length axis |
-| B1 / B1-CPLR | B1A | Height-direction bars | cage height axis |
-| B2 / B2-CPLR | B1A | Length-direction bars | cage length axis |
-
-### EDB cell derivation rules
-
-| Cell | Parameter | Derived from |
-|---|---|---|
-| H36 | Cage length | `max(Length)` of **T2+B2** bars |
-| I36 | Cage height | `max(Length)` of **T1+B1** bars |
-| J36 | Total weight (T) | sum `Weight ?? Formula_Weight` all bars ÷ 1000, **plus coupler heads (kg)** |
-| N36 | T1 dominant dia | modal `Size` of T1* bars |
-| O36 | T1 spacing | Y-span of T1-CPLR positions ÷ (count−1) → nearest 5mm |
-| P36 | T2 dominant dia | modal `Size` of T2* bars |
-| Q36 | T2 spacing | X-span of T2-CPLR positions ÷ (count−1) → nearest 5mm |
-| R36 | T2 bar count | unique T2 X-positions |
-| T36 | B1 dominant dia | modal `Size` of B1* bars |
-| U36 | B1 spacing | Y-span of B1-CPLR positions ÷ (count−1) → nearest 5mm |
-| V36 | B2 dominant dia | modal `Size` of B2* bars |
-| W36 | B2 spacing | X-span of B2-CPLR positions ÷ (count−1) → nearest 5mm |
-| X36 | B2 bar count | unique B2 X-positions |
-| Z36 | Mesh-only weight (T) | sum T1A+B1A `Weight ?? Formula_Weight` ÷ 1000, **plus mesh coupler heads (kg)** |
-
-### ⚠ Critical implementation rule
-
-**Always derive H36/I36 from bar `Length` property of the named layer, NOT from world-axis coordinate extents.**
-
-```javascript
-// WRONG — orientation-dependent, silently breaks on rotated cages
-const lenMm = Math.max(...allX) - Math.min(...allX);
-
-// CORRECT — orientation-independent
-const lenMm = Math.max(...t2b2bars.map(b => b.Length || 0));  // H36
-const hgtMm = Math.max(...t1b1bars.map(b => b.Length || 0));  // I36
-```
-
-See `tasks/lessons.md` for the full post-mortem.
-
----
-
-## Lessons File
-
-`tasks/lessons.md` — error patterns and corrective rules. Read before touching `extractSlabData()`.
-
----
-
-## Do Not
-- Deploy this folder or expose it via a server
-- Use this as the source of bar geometry dimensions in production reports
-- Install additional npm packages here (it is intentionally dependency-light)
+| `tasks/pop.md` | Through-bar / coupler head outside-zone analysis |
+| `tasks/lessons.md` | Error patterns and corrective rules |
