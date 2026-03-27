@@ -16,6 +16,7 @@
  */
 
 let allData      = [];
+let _couplerMap  = new Map(); // IFCBEAM coupler heads: Map<expressID, { layer, weight, ... }>
 let filteredData = [];
 let cageAxis     = [0, 0, 1];
 let cageAxisName = 'Z';
@@ -154,7 +155,8 @@ async function processFile() {
 
         updateProgress(40, 'Analysing cage structure…');
         const parser = new IFCParser();
-        allData = await parser.parseFile(content);
+        allData     = await parser.parseFile(content);
+        _couplerMap = parser.couplerMap || new Map();
         if (!allData.length) throw new Error('No bars extracted.');
         cageAxis     = parser.cageAxis;
         cageAxisName = parser.cageAxisName;
@@ -173,7 +175,7 @@ async function processFile() {
                     const arrayBuffer = await readFileAsBuffer(file);
                     const barMap = new Map();
                     allData.forEach(b => barMap.set(parseInt(b._entityId, 10), b));
-                    const dims = await window._viewer3d.loadIFC(arrayBuffer, barMap, cageAxisName);
+                    const dims = await window._viewer3d.loadIFC(arrayBuffer, barMap, cageAxisName, _couplerMap);
                     if (dims) _updateDimBoxesFromBREP(dims);
                     _buildViewerCheckboxes();
                 } catch (e) {
@@ -390,15 +392,18 @@ function _buildViewerCheckboxes() {
         const sampleBar = key === 'PRL/PRC Mismatch'
             ? { _prlPrcMismatch: true }
             : key === 'Coupler Head'
-            ? null  // IFCBEAM entities — not in allData; _barColour(null) returns gray
+            ? null  // IFCBEAM entities without an Avonmouth layer; _barColour(null) returns gray
             : allData.find(b => !b._prlPrcMismatch && (b.Avonmouth_Layer_Set || b.Bar_Type || 'Unknown') === key) || null;
         const colour = window._viewer3d._barColour(sampleBar);
         const hex   = (colour >>> 0).toString(16).padStart(6, '0');
-        const count = key === 'PRL/PRC Mismatch'
+        // Count rebars in this layer + any IFCBEAM coupler heads that share the same Avonmouth layer
+        const rebarCount = key === 'PRL/PRC Mismatch'
             ? allData.filter(b => b._prlPrcMismatch).length
             : key === 'Coupler Head'
-            ? 0  // count not available from allData — IFCBEAM entities are not parsed
+            ? 0
             : allData.filter(b => !b._prlPrcMismatch && (b.Avonmouth_Layer_Set || b.Bar_Type || 'Unknown') === key).length;
+        const couplerCount = [..._couplerMap.values()].filter(c => (c.layer || 'Coupler Head') === key).length;
+        const count = rebarCount + couplerCount;
         const label = document.createElement('label');
         label.className = 'viewer-cb-label';
         label.innerHTML = `
@@ -610,8 +615,19 @@ function displayLayerWeightStats() {
         layerMap[layer].weight += bar.Weight || 0;
     });
 
+    // Add IFCBEAM coupler head weights to their Avonmouth layer bucket
+    let totalCouplerWeight = 0;
+    _couplerMap.forEach(c => {
+        if (!c.layer || !c.weight) return;
+        if (layerMap[c.layer]) {
+            layerMap[c.layer].couplerWeight = (layerMap[c.layer].couplerWeight || 0) + c.weight;
+            layerMap[c.layer].couplerCount  = (layerMap[c.layer].couplerCount  || 0) + 1;
+        }
+        totalCouplerWeight += c.weight;
+    });
+
     const rows        = Object.entries(layerMap).sort((a, b) => a[0].localeCompare(b[0]));
-    const totalWeight = rows.reduce((s, [, v]) => s + v.weight, 0);
+    const totalWeight = rows.reduce((s, [, v]) => s + v.weight + (v.couplerWeight || 0), 0);
     rows.forEach(([layer, data]) => {
         const pct        = totalWeight > 0 ? (data.weight / totalWeight * 100) : 0;
         const isUnknown  = layer === 'Unknown';
@@ -622,25 +638,35 @@ function displayLayerWeightStats() {
         const displayLayer = isInferred
             ? layer.replace(' \u2691', '') + ' <span class="inferred-badge" title="ATK-inferred">\u2691 ATK-inferred</span>'
             : layer;
+        const cw = data.couplerWeight || 0;
+        const combinedWeight = data.weight + cw;
+        const pct2 = totalWeight > 0 ? (combinedWeight / totalWeight * 100) : 0;
+        const couplerNote = cw > 0
+            ? ` <span title="${data.couplerCount} coupler head(s): +${cw.toFixed(2)} kg" style="color:#888;font-size:0.82em">+${cw.toFixed(2)} cpls</span>`
+            : '';
         tr.innerHTML = `
             <td><strong>${isInferred ? displayLayer : layer}</strong>${isUnknown ? ' ⚠' : ''}</td>
             <td><span class="bar-type-badge ${(data.type || '').toLowerCase().replace(/\s+/g, '-')}">${data.type}</span></td>
             <td>${data.count.toLocaleString()}</td>
-            <td>${data.weight.toFixed(1)}</td>
+            <td>${combinedWeight.toFixed(1)}${couplerNote}</td>
             <td>
                 <div class="weight-bar-wrap">
-                    <div class="weight-bar-fill" style="width:${pct.toFixed(1)}%"></div>
-                    <span class="weight-bar-pct">${pct.toFixed(1)}%</span>
+                    <div class="weight-bar-fill" style="width:${pct2.toFixed(1)}%"></div>
+                    <span class="weight-bar-pct">${pct2.toFixed(1)}%</span>
                 </div>
             </td>`;
         container.appendChild(tr);
     });
     const totalRow = document.createElement('tr');
     totalRow.className = 'total-row';
+    const couplerCountTotal = _couplerMap.size;
+    const couplerNote = totalCouplerWeight > 0
+        ? ` <span title="${couplerCountTotal} coupler head(s)" style="color:#aaa;font-size:0.82em">(incl. ${totalCouplerWeight.toFixed(1)} kg couplers)</span>`
+        : '';
     totalRow.innerHTML = `
         <td colspan="2"><strong>TOTAL</strong></td>
         <td><strong>${allData.length.toLocaleString()}</strong></td>
-        <td><strong>${totalWeight.toFixed(1)}</strong></td>
+        <td><strong>${totalWeight.toFixed(1)}</strong>${couplerNote}</td>
         <td></td>`;
     container.appendChild(totalRow);
 }

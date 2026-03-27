@@ -105,7 +105,7 @@ class Viewer3D {
      * @param {string} [cageAxisName='Z'] — cage long axis from parser ('X'|'Y'|'Z')
      *   Used to assign meshLength vs meshWidth without relying on a min/max heuristic.
      */
-    async loadIFC(arrayBuffer, barMap, cageAxisName = 'Z') {
+    async loadIFC(arrayBuffer, barMap, cageAxisName = 'Z', couplerMap = new Map()) {
         // Clear previous scene geometry (keep lights)
         const lights = [];
         this.scene.traverse(o => { if (o.isLight) lights.push(o); });
@@ -134,9 +134,13 @@ class Viewer3D {
         let barCount = 0, geomCount = 0;
 
         this.ifcapi.StreamAllMeshes(modelID, (mesh) => {
-            const eid = mesh.expressID;
-            const bar = barMap.get(eid);
-            const colour = this._barColour(bar);
+            const eid     = mesh.expressID;
+            const bar     = barMap.get(eid);
+            const coupler = !bar ? couplerMap.get(eid) : null;
+            // Coupler heads use their Avonmouth layer colour; unknown geometry falls back to gray
+            const colour  = coupler
+                ? this._barColour({ Avonmouth_Layer_Set: coupler.layer, Bar_Type: 'Mesh' })
+                : this._barColour(bar);
 
             const allPos = [], allNrm = [], allIdx = [];
             let vtxOffset = 0;
@@ -205,7 +209,10 @@ class Viewer3D {
             const tMesh = new THREE.Mesh(geo, mat);
             tMesh.userData.expressID = eid;
 
-            const groupKey = (bar && bar._prlPrcMismatch) ? 'PRL/PRC Mismatch' : (bar ? (bar.Avonmouth_Layer_Set || bar.Bar_Type || 'Unknown') : 'Coupler Head');
+            const groupKey = (bar && bar._prlPrcMismatch) ? 'PRL/PRC Mismatch'
+                : bar     ? (bar.Avonmouth_Layer_Set || bar.Bar_Type || 'Unknown')
+                : coupler ? (coupler.layer || 'Coupler Head')
+                : 'Coupler Head';
             if (!this.layerGroups.has(groupKey)) {
                 const g = new THREE.Group();
                 g.name = groupKey;
