@@ -106,6 +106,26 @@ In `_buildDimensions(cageAxisName)`, use `assignLW(spanX, spanY)`:
 
 ---
 
+## IFCBEAM Coupler Heads — Not in barMap → Appeared as 'Unknown' (March 2026)
+
+**Mistake:** `StreamAllMeshes` fell through to `groupKey = 'Unknown'` for IFCBEAM entities because `barMap.get(eid)` returns null for them (barMap only holds IFCREINFORCINGBAR).
+
+**Rule:** Always check `couplerMap.get(eid)` after a barMap miss before falling back to 'Unknown'. IFCBEAM entities carry their own `Avonmouth.Layer/Set` pset — the same parser machinery (`extractProperties`) reads it correctly. There is no need to follow the `Bylor.connected_rebar` link; the layer on the IFCBEAM itself is authoritative.
+
+**Why:** Without this, coupler heads fill the 'Unknown' section of the layer filter and their weight is silently omitted from every weight total.
+
+---
+
+## Weight Source Priority: ATK pset `Weight` > `Formula_Weight` (March 2026)
+
+**Mistake:** `extractSlabData` used `Formula_Weight` (geometry estimate: π×r²×L×7777 kg/m³) for J36 (total weight) and Z36 (mesh weight). The website layer weight table has always used `Weight` (ATK/ICOS pset). This caused a ~96 kg discrepancy for cage 672 (10319.1 kg on website vs 10223 kg in EDB).
+
+**Rule:** Always use `b.Weight ?? b.Formula_Weight ?? 0` everywhere a bar weight is needed. `Weight` is the authoritative ATK pset value. `Formula_Weight` is a geometry fallback — only valid when the ATK pset is absent.
+
+**Why:** The two values diverge for any bar where ATK's measured/recorded weight differs from the geometry calculation (density assumption, coupler offsets, etc.).
+
+---
+
 ## Spacing Formula: N bars vs N-1 gaps (March 2026)
 
 **Mistake:** Spacing was computed as `span / N` (treating N as the number of gaps) when it should be `span / (N-1)` (N bars create N-1 gaps between them).
