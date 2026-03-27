@@ -109,6 +109,48 @@ Example: 1704 cage (2HD70730AC2):
 
 ---
 
+## IFCBEAM Coupler Head System
+
+IFCBEAM entities are coupler heads attached to the ends of rebars at F1A/N1A faces.
+
+### What the parser extracts (`extractCouplerHeads()`)
+- Entity type: `IFCBEAM`
+- Reads same psets as rebars via `extractProperties()`
+- Key fields extracted:
+  - `layer` — from `Avonmouth.Layer/Set` pset (e.g. 'F1A', 'N1A', 'VS1')
+  - `weight` — from `ATK Couplers Parts.Coupler weight` (kg, IFCMASSMEASURE)
+  - `globalId`, `eid`
+- Stored in `IFCParser.couplerMap` (Map of eid → coupler object)
+
+### Layer assignment
+IFCBEAM entities carry their own `Avonmouth.Layer/Set` — same pset as their parent rebar.
+No need to look up the parent rebar. The layer on the IFCBEAM is authoritative.
+
+### 3D Viewer (`viewer3d.js`)
+- `couplerMap` passed to `loadIFC(arrayBuffer, barMap, cageAxisName, couplerMap)`
+- In `StreamAllMeshes`: if `barMap.get(eid)` is null → check `couplerMap.get(eid)`
+- `groupKey` = `coupler.layer || 'Coupler Head'`
+- Colour = same as that layer's mesh bars (not gray)
+- Previously these appeared as 'Unknown' — now correctly grouped with parent layer
+
+### Weight accounting
+- `_getCouplerWeightsByType()` in `main.js` splits coupler weights:
+  - **mesh** = layers matching `/^[FNBTfnbt]\d+A$/i` (F1A, N1A, T1A, B1A)
+  - **nonMesh** = all others (PRL, PRC, VS, HS, etc.)
+- Coupler weights are added to:
+  - UDL display (website) — mesh + non-mesh combined into total cage weight
+  - Layer weight table — each layer shows `bar weight + coupler weight` with `+X.XX cpls` note
+  - Wall cage EDB C33/C37 — UDL mesh and non-mesh include respective coupler weights
+  - Slab EDB J36 — total weight includes all coupler heads
+  - Slab EDB Z36 — mesh weight includes mesh-layer coupler heads
+
+### Known limitation — through-bars (documented in `tasks/pop.md`)
+9 VS2 bars (Dir_Y=1.0) have Start_Y inside N1A zone but End_Y at ~808mm (far beyond F1A).
+Root cause: the IFCBEAM coupler head on the F1A face drives the parser's End_Y to ~808mm.
+Detection fix (not yet implemented): use `max(Start_Y, End_Y) > F1A_ABS_MAX` for outside check.
+
+---
+
 ## Running Diagnostics
 ```bash
 # From this folder — diagnose why web-ifc WASM fails to load
@@ -151,7 +193,7 @@ Slab cages have only T1A and B1A mesh layers (no F1A / N1A). Detected by `IFCPar
 |---|---|---|
 | H36 | Cage length | `max(Length)` of **T2+B2** bars |
 | I36 | Cage height | `max(Length)` of **T1+B1** bars |
-| J36 | Total weight (T) | sum `Formula_Weight` all bars ÷ 1000 |
+| J36 | Total weight (T) | sum `Weight ?? Formula_Weight` all bars ÷ 1000, **plus coupler heads (kg)** |
 | N36 | T1 dominant dia | modal `Size` of T1* bars |
 | O36 | T1 spacing | Y-span of T1-CPLR positions ÷ (count−1) → nearest 5mm |
 | P36 | T2 dominant dia | modal `Size` of T2* bars |
@@ -162,7 +204,7 @@ Slab cages have only T1A and B1A mesh layers (no F1A / N1A). Detected by `IFCPar
 | V36 | B2 dominant dia | modal `Size` of B2* bars |
 | W36 | B2 spacing | X-span of B2-CPLR positions ÷ (count−1) → nearest 5mm |
 | X36 | B2 bar count | unique B2 X-positions |
-| Z36 | Mesh-only weight (T) | sum T1A+B1A `Formula_Weight` ÷ 1000 |
+| Z36 | Mesh-only weight (T) | sum T1A+B1A `Weight ?? Formula_Weight` ÷ 1000, **plus mesh coupler heads (kg)** |
 
 ### ⚠ Critical implementation rule
 
