@@ -1327,9 +1327,10 @@ async function exportCageReport() {
     }
 }
 
-// ── Template DXF — F1A face elevation with VS/HS strut coupler holes ──────────
+// ── Template DXF — F1A/T1A face elevation with VS/HS strut coupler holes ──────────
 // Reads IFCBEAM entities directly from raw IFC text.
-// Filters: F1A face (Y > midpoint), Layer/Set = VS or HS, OD from ATK EMBEDMENTS HEIGHT.
+// Filters: high-Y face (Y > midpoint), Layer/Set = VS or HS, OD from ATK EMBEDMENTS HEIGHT.
+// Face label: F1A for wall cages (X-Z face plane), T1A for slab/roof cages (X-Y face plane).
 // Hole size = coupler body OD + 2mm tolerance.
 
 function _parseIFCBeamHoles(ifcText) {
@@ -1599,7 +1600,7 @@ function exportTemplateDXF(maxLength, maxWidth) {
         holes.forEach(h => { byDia[h.holeDia] = (byDia[h.holeDia] || 0) + 1; });
         const sizeStr = Object.entries(byDia).map(([d, c]) => `${d}mm x${c}`).join('  ');
         TEXT(COL_MARGIN, baseY + 12,
-            `CAGE ${cageRef}  —  F1A FACE PLATE TEMPLATE  |  Rules: max ${maxLength}L x ${maxWidth}W mm  |  ${totalPlates} plates (${vsPlates.length} VS + ${hsPlates.length} HS)  |  ${plotHoles.length} holes`,
+            `CAGE ${cageRef}  —  ${useY ? 'T1A' : 'F1A'} FACE PLATE TEMPLATE  |  Rules: max ${maxLength}L x ${maxWidth}W mm  |  ${totalPlates} plates (${vsPlates.length} VS + ${hsPlates.length} HS)  |  ${plotHoles.length} holes`,
             12, 'TEXT');
         TEXT(COL_MARGIN, baseY - 2,
             `25mm edge clearance  |  Hole dia = coupler OD + 2mm  |  Sizes: ${sizeStr}`,
