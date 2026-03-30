@@ -1401,68 +1401,74 @@ function _parseIFCBeamHoles(ifcText) {
     const yMid  = (Math.min(...yVals) + Math.max(...yVals)) / 2;
     return beams
         .filter(b => b.yMm > yMid && b.od !== null && /^[VH]S/i.test(b.layer || ''))
-        .map(b => ({ xMm: b.xMm, zMm: b.zMm, holeDia: b.od + 2 }));
+        .map(b => ({ xMm: b.xMm, zMm: b.zMm, holeDia: b.od + 2, layer: b.layer }));
 }
 
-// Breaks plotHoles into rectangular plates obeying maxLength (X) and maxWidth (Z) limits.
+// Groups holes into rectangular plates.
+// VS (Vertical Struts): long axis = Z (maxLength), narrow axis = X (maxWidth)
+//   → band by X first, then group by Z within each X band
+// HS (Horizontal Struts): long axis = X (maxLength), narrow axis = Z (maxWidth)
+//   → band by Z first, then group by X within each Z band
 // Each plate edge sits 25mm clear of the nearest hole edge.
 function _computePlates(plotHoles, maxLength, maxWidth) {
     const CLEARANCE = 25;
-    if (!plotHoles.length) return [];
 
-    // Step 1: sort by Z and group into horizontal Z bands (width constraint)
-    const byZ = [...plotHoles].sort((a, b) => a.pz - b.pz);
-    const zBands = [];
-    let band = [byZ[0]];
-    let bMinZ = byZ[0].pz - byZ[0].holeDia / 2 - CLEARANCE;
-    let bMaxZ = byZ[0].pz + byZ[0].holeDia / 2 + CLEARANCE;
-
-    for (let i = 1; i < byZ.length; i++) {
-        const h = byZ[i];
-        const cMin = Math.min(bMinZ, h.pz - h.holeDia / 2 - CLEARANCE);
-        const cMax = Math.max(bMaxZ, h.pz + h.holeDia / 2 + CLEARANCE);
-        if (cMax - cMin > maxWidth) {
-            zBands.push(band);
-            band = [h];
-            bMinZ = h.pz - h.holeDia / 2 - CLEARANCE;
-            bMaxZ = h.pz + h.holeDia / 2 + CLEARANCE;
-        } else {
-            band.push(h); bMinZ = cMin; bMaxZ = cMax;
+    // Generic: band holes by `bandKey` axis (narrow, maxWidth), then group by `groupKey` (long, maxLength)
+    function bandAndGroup(holes, bandKey, groupKey) {
+        if (!holes.length) return [];
+        const sorted = [...holes].sort((a, b) => a[bandKey] - b[bandKey]);
+        const bands = [];
+        let bnd = [sorted[0]];
+        let bMin = sorted[0][bandKey] - sorted[0].holeDia / 2 - CLEARANCE;
+        let bMax = sorted[0][bandKey] + sorted[0].holeDia / 2 + CLEARANCE;
+        for (let i = 1; i < sorted.length; i++) {
+            const h = sorted[i];
+            const cMin = Math.min(bMin, h[bandKey] - h.holeDia / 2 - CLEARANCE);
+            const cMax = Math.max(bMax, h[bandKey] + h.holeDia / 2 + CLEARANCE);
+            if (cMax - cMin > maxWidth) {
+                bands.push(bnd); bnd = [h];
+                bMin = h[bandKey] - h.holeDia / 2 - CLEARANCE;
+                bMax = h[bandKey] + h.holeDia / 2 + CLEARANCE;
+            } else { bnd.push(h); bMin = cMin; bMax = cMax; }
         }
-    }
-    zBands.push(band);
+        bands.push(bnd);
 
-    // Step 2: within each Z band, sort by X and group by length constraint
-    const plates = [];
-    for (const zHoles of zBands) {
-        const byX = [...zHoles].sort((a, b) => a.px - b.px);
-        let grp = [byX[0]];
-        let gMinX = byX[0].px - byX[0].holeDia / 2 - CLEARANCE;
-        let gMaxX = byX[0].px + byX[0].holeDia / 2 + CLEARANCE;
-
-        for (let i = 1; i < byX.length; i++) {
-            const h  = byX[i];
-            const cMax = h.px + h.holeDia / 2 + CLEARANCE;
-            if (cMax - gMinX > maxLength) {
-                plates.push(grp);
-                grp  = [h];
-                gMinX = h.px - h.holeDia / 2 - CLEARANCE;
-                gMaxX = cMax;
-            } else {
-                grp.push(h); gMaxX = cMax;
+        const plates = [];
+        for (const b of bands) {
+            const byG = [...b].sort((a, c) => a[groupKey] - c[groupKey]);
+            let grp = [byG[0]];
+            let gMin = byG[0][groupKey] - byG[0].holeDia / 2 - CLEARANCE;
+            let gMax = byG[0][groupKey] + byG[0].holeDia / 2 + CLEARANCE;
+            for (let i = 1; i < byG.length; i++) {
+                const h = byG[i], cMax = h[groupKey] + h.holeDia / 2 + CLEARANCE;
+                if (cMax - gMin > maxLength) {
+                    plates.push(grp); grp = [h];
+                    gMin = h[groupKey] - h.holeDia / 2 - CLEARANCE; gMax = cMax;
+                } else { grp.push(h); gMax = cMax; }
             }
+            plates.push(grp);
         }
-        plates.push(grp);
+        return plates;
     }
 
-    return plates.map((holes, idx) => {
+    const toPlate = (holes, idx, type) => {
         const minX = Math.min(...holes.map(h => h.px - h.holeDia / 2)) - CLEARANCE;
         const maxX = Math.max(...holes.map(h => h.px + h.holeDia / 2)) + CLEARANCE;
         const minZ = Math.min(...holes.map(h => h.pz - h.holeDia / 2)) - CLEARANCE;
         const maxZ = Math.max(...holes.map(h => h.pz + h.holeDia / 2)) + CLEARANCE;
-        return { id: idx + 1, holes, minX, maxX, minZ, maxZ,
+        return { id: idx + 1, type, holes, minX, maxX, minZ, maxZ,
                  length: +(maxX - minX).toFixed(1), width: +(maxZ - minZ).toFixed(1) };
-    });
+    };
+
+    const vsHoles = plotHoles.filter(h => /^VS/i.test(h.layer || ''));
+    const hsHoles = plotHoles.filter(h => /^HS/i.test(h.layer || ''));
+
+    // VS: narrow in X (bandKey=px, maxWidth), long in Z (groupKey=pz, maxLength)
+    const vsPlates = bandAndGroup(vsHoles, 'px', 'pz').map((h, i) => toPlate(h, i, 'VS'));
+    // HS: narrow in Z (bandKey=pz, maxWidth), long in X (groupKey=px, maxLength)
+    const hsPlates = bandAndGroup(hsHoles, 'pz', 'px').map((h, i) => toPlate(h, i, 'HS'));
+
+    return { vsPlates, hsPlates };
 }
 
 function exportTemplateDXF(maxLength, maxWidth) {
@@ -1486,7 +1492,7 @@ function exportTemplateDXF(maxLength, maxWidth) {
             .sort((a, b) => a.px !== b.px ? a.px - b.px : a.pz - b.pz);
         plotHoles.forEach((h, i) => { h.num = i + 1; });
 
-        const plates = _computePlates(plotHoles, maxLength, maxWidth);
+        const { vsPlates, hsPlates } = _computePlates(plotHoles, maxLength, maxWidth);
 
         const fileEl  = document.getElementById('ifc-file');
         const fname   = fileEl?.files[0]?.name || 'CAGE';
@@ -1498,90 +1504,86 @@ function exportTemplateDXF(maxLength, maxWidth) {
         const LINE   = (x1,y1,x2,y2,lyr) => emit('0','LINE','8',lyr,'10',x1.toFixed(1),'20',y1.toFixed(1),'30','0.0','11',x2.toFixed(1),'21',y2.toFixed(1),'31','0.0');
         const CIRCLE = (cx,cy,r,lyr)     => emit('0','CIRCLE','8',lyr,'10',cx.toFixed(1),'20',cy.toFixed(1),'30','0.0','40',r.toFixed(2));
         const TEXT   = (x,y,txt,h,lyr)   => emit('0','TEXT','8',lyr,'10',x.toFixed(1),'20',y.toFixed(1),'30','0.0','40',h.toFixed(1),'1',String(txt));
-        // Small dimension: horizontal tick between x0 and x1 at Y=y, label centred above
         const HDIM = (x0, x1, y, label) => {
-            LINE(x0, y, x1, y, 'DIMS');
-            LINE(x0, y - 4, x0, y + 4, 'DIMS');
-            LINE(x1, y - 4, x1, y + 4, 'DIMS');
-            TEXT((x0 + x1) / 2 - 4, y + 5, String(label), 7, 'DIMS');
+            LINE(x0, y, x1, y, 'DIMS'); LINE(x0, y-4, x0, y+4, 'DIMS'); LINE(x1, y-4, x1, y+4, 'DIMS');
+            TEXT((x0+x1)/2 - 4, y+5, String(label), 7, 'DIMS');
         };
-        // Small dimension: vertical tick between z0 and z1 at X=x, label to right
         const VDIM = (x, z0, z1, label) => {
-            LINE(x, z0, x, z1, 'DIMS');
-            LINE(x - 4, z0, x + 4, z0, 'DIMS');
-            LINE(x - 4, z1, x + 4, z1, 'DIMS');
-            TEXT(x + 5, (z0 + z1) / 2, String(label), 7, 'DIMS');
+            LINE(x, z0, x, z1, 'DIMS'); LINE(x-4, z0, x+4, z0, 'DIMS'); LINE(x-4, z1, x+4, z1, 'DIMS');
+            TEXT(x+5, (z0+z1)/2, String(label), 7, 'DIMS');
         };
 
         emit('0','SECTION','2','HEADER','9','$ACADVER','1','AC1009','0','ENDSEC');
         emit('0','SECTION','2','ENTITIES');
 
-        // Layout constants
-        const COL_MARGIN = 80;   // DXF X offset for all plates
-        const DRAW_PAD   = 50;   // padding around each plate in its drawing area
-        const PLATE_GAP  = 70;   // vertical gap between successive plates
-        const LABEL_H    = 22;   // height reserved above each plate for its label
+        const COL_MARGIN = 80, DRAW_PAD = 50, PLATE_GAP = 70, LABEL_H = 22;
+        let baseY = DRAW_PAD;
 
-        let baseY = DRAW_PAD;    // current Y baseline for next plate
+        const drawPlates = (plates, sectionLabel) => {
+            if (!plates.length) return;
+            // Section header
+            TEXT(COL_MARGIN, baseY, `── ${sectionLabel} ──  (${plates.length} plates)`, 13, 'TEXT');
+            baseY += 30;
 
-        for (const plate of plates) {
-            const ox = COL_MARGIN;                // DXF X of plate left edge
-            const oz = baseY;                     // DXF Z (Y in DXF) of plate bottom edge
+            for (const plate of plates) {
+                const ox = COL_MARGIN, oz = baseY;
 
-            // ── Plate outline
-            LINE(ox,              oz,              ox + plate.length, oz,              'PLATE_OUTLINE');
-            LINE(ox + plate.length, oz,            ox + plate.length, oz + plate.width,'PLATE_OUTLINE');
-            LINE(ox + plate.length, oz + plate.width, ox,            oz + plate.width,'PLATE_OUTLINE');
-            LINE(ox,              oz + plate.width, ox,              oz,              'PLATE_OUTLINE');
+                // Plate outline
+                LINE(ox,              oz,              ox+plate.length, oz,              'PLATE_OUTLINE');
+                LINE(ox+plate.length, oz,              ox+plate.length, oz+plate.width,  'PLATE_OUTLINE');
+                LINE(ox+plate.length, oz+plate.width,  ox,             oz+plate.width,  'PLATE_OUTLINE');
+                LINE(ox,              oz+plate.width,  ox,             oz,              'PLATE_OUTLINE');
 
-            // ── Plate ID + dimensions label (above plate)
-            TEXT(ox, oz + plate.width + 6,
-                `PLATE-${String(plate.id).padStart(2,'0')}  ${Math.round(plate.length)} x ${Math.round(plate.width)} mm  (${plate.holes.length} holes)`,
-                10, 'TEXT');
+                // Plate label above
+                TEXT(ox, oz+plate.width+6,
+                    `${plate.type}-PLATE-${String(plate.id).padStart(2,'0')}  ${Math.round(plate.length)} x ${Math.round(plate.width)} mm  (${plate.holes.length} holes)`,
+                    10, 'TEXT');
 
-            // ── Overall plate dimension: length (below plate)
-            HDIM(ox, ox + plate.length, oz - 20, `${Math.round(plate.length)} mm`);
+                // Overall dimensions
+                HDIM(ox, ox+plate.length, oz-20, `${Math.round(plate.length)} mm`);
+                VDIM(ox-20, oz, oz+plate.width, `${Math.round(plate.width)} mm`);
 
-            // ── Overall plate dimension: width (left of plate)
-            VDIM(ox - 20, oz, oz + plate.width, `${Math.round(plate.width)} mm`);
+                // Holes
+                for (const h of plate.holes) {
+                    const hx = ox + (h.px - plate.minX);
+                    const hz = oz + (h.pz - plate.minZ);
+                    const r  = h.holeDia / 2;
+                    CIRCLE(hx, hz, r, 'HOLES');
+                    TEXT(hx-r, hz+r+3, `${cageRef}-CPLR-${String(h.num).padStart(3,'0')}`, 6, 'TEXT');
+                }
 
-            // ── Holes
-            for (const h of plate.holes) {
-                const hx = ox + (h.px - plate.minX);
-                const hz = oz + (h.pz - plate.minZ);
-                const r  = h.holeDia / 2;
-                CIRCLE(hx, hz, r, 'HOLES');
-                TEXT(hx - r, hz + r + 3, `${cageRef}-CPLR-${String(h.num).padStart(3,'0')}`, 6, 'TEXT');
+                // 25mm clearance dims at all four edges
+                const byPx = [...plate.holes].sort((a, b) => a.px - b.px);
+                const byPz = [...plate.holes].sort((a, b) => a.pz - b.pz);
+                const lH = byPx[0], rH = byPx[byPx.length-1];
+                const bH = byPz[0], tH = byPz[byPz.length-1];
+                const lhx = ox+(lH.px-plate.minX), lhz = oz+(lH.pz-plate.minZ);
+                const rhx = ox+(rH.px-plate.minX), rhz = oz+(rH.pz-plate.minZ);
+                const bhx = ox+(bH.px-plate.minX), bhz = oz+(bH.pz-plate.minZ);
+                const thx = ox+(tH.px-plate.minX), thz = oz+(tH.pz-plate.minZ);
+                HDIM(ox,              lhx-lH.holeDia/2, lhz, '25');
+                HDIM(rhx+rH.holeDia/2, ox+plate.length, rhz, '25');
+                VDIM(bhx, oz,              bhz-bH.holeDia/2, '25');
+                VDIM(thx, thz+tH.holeDia/2, oz+plate.width,  '25');
+
+                baseY += plate.width + DRAW_PAD + PLATE_GAP + LABEL_H;
             }
+            baseY += 20; // extra gap between VS and HS sections
+        };
 
-            // ── Clearance dims: left hole → plate left edge  (25mm)
-            const byPx  = [...plate.holes].sort((a, b) => a.px - b.px);
-            const byPz  = [...plate.holes].sort((a, b) => a.pz - b.pz);
-            const leftH  = byPx[0],  rightH = byPx[byPx.length - 1];
-            const botH   = byPz[0],  topH   = byPz[byPz.length - 1];
+        drawPlates(vsPlates, 'VS PLATES — Vertical Struts (long axis = Z)');
+        drawPlates(hsPlates, 'HS PLATES — Horizontal Struts (long axis = X)');
 
-            const lhx = ox + (leftH.px  - plate.minX),  lhz = oz + (leftH.pz  - plate.minZ);
-            const rhx = ox + (rightH.px - plate.minX),  rhz = oz + (rightH.pz - plate.minZ);
-            const bhx = ox + (botH.px   - plate.minX),  bhz = oz + (botH.pz   - plate.minZ);
-            const thx = ox + (topH.px   - plate.minX),  thz = oz + (topH.pz   - plate.minZ);
-
-            HDIM(ox,                lhx - leftH.holeDia / 2,  lhz,  '25');   // left clearance
-            HDIM(rhx + rightH.holeDia / 2, ox + plate.length, rhz,  '25');   // right clearance
-            VDIM(bhx, oz,                  bhz - botH.holeDia / 2,   '25');  // bottom clearance
-            VDIM(thx, thz + topH.holeDia / 2, oz + plate.width,      '25');  // top clearance
-
-            baseY += plate.width + DRAW_PAD + PLATE_GAP + LABEL_H;
-        }
-
-        // ── Global title (above all plates)
+        // Global title above everything
+        const totalPlates = vsPlates.length + hsPlates.length;
         const byDia = {};
         holes.forEach(h => { byDia[h.holeDia] = (byDia[h.holeDia] || 0) + 1; });
         const sizeStr = Object.entries(byDia).map(([d, c]) => `${d}mm x${c}`).join('  ');
         TEXT(COL_MARGIN, baseY + 12,
-            `CAGE ${cageRef}  —  F1A FACE PLATE TEMPLATE  |  Rules: max ${maxLength}L x ${maxWidth}W mm  |  ${plates.length} plates  |  ${plotHoles.length} holes`,
+            `CAGE ${cageRef}  —  F1A FACE PLATE TEMPLATE  |  Rules: max ${maxLength}L x ${maxWidth}W mm  |  ${totalPlates} plates (${vsPlates.length} VS + ${hsPlates.length} HS)  |  ${plotHoles.length} holes`,
             12, 'TEXT');
         TEXT(COL_MARGIN, baseY - 2,
-            `25mm edge clearance from hole edge to plate edge  |  Hole dia = coupler OD + 2mm  |  Sizes: ${sizeStr}`,
+            `25mm edge clearance  |  Hole dia = coupler OD + 2mm  |  Sizes: ${sizeStr}`,
             9, 'TEXT');
 
         emit('0','ENDSEC','0','EOF');
