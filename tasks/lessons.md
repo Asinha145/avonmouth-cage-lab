@@ -162,3 +162,50 @@ In `_buildDimensions(cageAxisName)`, use `assignLW(spanX, spanY)`:
 **Reference:** `docs/ifc-entity-investigation.md` — full methodology and diagnostic script template.
 
 ---
+
+## VS/HS Plate Orientation — Never Hardcode Long Axis (March 2026)
+
+**Mistake:** `_computePlates` hardcoded `bandAndGroup(vsHoles, 'px', 'pz')` — always treating Z as the long axis for VS plates. This was correct for wall cages (VS struts run up the wall height = many unique Z positions) but wrong for roof/slab cages where VS struts run horizontally across the slab span = many unique X positions, all at the same Z.
+
+**Root cause pattern:** Same brittle orientation assumption as the H36/I36 axis bug — the algorithm encoded a spatial assumption (VS long axis = IFC-Z) instead of deriving it from the actual data distribution.
+
+**Physical vs IFC axis for reference:**
+
+| Cage type | Strut | Physical direction | IFC long axis |
+|---|---|---|---|
+| Wall cage (1613) | VS | Up the wall height | Z (many unique Z) |
+| Wall cage (1613) | HS | Along wall length | X (many unique X) |
+| Roof/slab cage (RF35) | VS | Across slab span | X (many unique X, Z≈constant) |
+
+**Rule:** Auto-detect long axis per hole group: count unique X positions vs unique Z positions. More unique Z → long=Z (band X, group Z). More unique X → long=X (band Z, group X).
+
+```javascript
+function getOrientation(holes) {
+    if (!holes.length) return { bandKey: 'px', groupKey: 'pz' };
+    const xUniq = new Set(holes.map(h => Math.round(h.px))).size;
+    const zUniq = new Set(holes.map(h => Math.round(h.pz))).size;
+    return zUniq >= xUniq
+        ? { bandKey: 'px', groupKey: 'pz' }   // long=Z (wall cage)
+        : { bandKey: 'pz', groupKey: 'px' };   // long=X (roof cage)
+}
+```
+
+**Why:** A roof cage's "Vertical Struts" are vertical in the cage's local frame, but the cage itself is installed flat — so in global IFC space those struts run horizontally. The bar name VS refers to cage-local orientation, not global orientation.
+
+**Pending improvement:** Replace `Math.round` bucketing with a ±15mm tolerance bucket to handle slight slab inclination or survey tolerances where Z values cluster near-zero but aren't exactly equal.
+
+---
+
+## Slab Cage Template Face Plane — Use X-Y Not X-Z (March 2026)
+
+**Mistake:** `exportTemplateDXF` always mapped `pz = zMm` (IFC-Z), treating every cage as a wall cage where the mesh face is the X-Z plane. For a slab/roof cage the mesh face is the X-Y plane — Z is constant and Y varies across the slab width. This gave plate widths of ~83mm (Z range ≈ 0) instead of the correct ~200mm (Y range = 117mm).
+
+**Rule:** Detect face plane from Z span of all holes:
+- Z span ≥ 100mm → wall cage → face plane = X-Z → `pz = zMm`
+- Z span < 100mm → slab cage → face plane = X-Y → `pz = yMm`
+
+**Why:** The template plate must match the physical face the formwork sits against. For a slab that face is horizontal (X-Y); for a wall it is vertical (X-Z). Using the wrong axis produces a geometrically meaningless plate.
+
+**Requires:** `yMm` must be passed through `_parseIFCBeamHoles` (add to `.map()` return object).
+
+---
