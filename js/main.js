@@ -1487,6 +1487,32 @@ function _computePlates(plotHoles, maxLength, maxWidth) {
     return { vsPlates, hsPlates };
 }
 
+// Detect which mesh face layer the coupler holes belong to by Y-proximity.
+// Face layers: F*/N* (wall cages), T*/B* (slab cages).
+// Returns e.g. 'F1A', 'T1A', or null if no face layers in allData.
+function _detectFaceName(holes) {
+    const faceRe = /^[FNTB]\d/i;
+    const layerY = {};
+    for (const bar of allData) {
+        const layer = bar.Avonmouth_Layer_Set;
+        if (!layer || !faceRe.test(layer)) continue;
+        const y = bar.Start_Y ?? bar.End_Y;
+        if (y == null) continue;
+        if (!layerY[layer]) layerY[layer] = [];
+        layerY[layer].push(y);
+    }
+    if (!Object.keys(layerY).length) return null;
+    const sorted = h => [...h].sort((a, b) => a - b);
+    const median = ys => sorted(ys)[Math.floor(ys.length / 2)];
+    const holeMedianY = median(holes.map(h => h.yMm));
+    let bestLayer = null, bestDist = Infinity;
+    for (const [layer, ys] of Object.entries(layerY)) {
+        const dist = Math.abs(median(ys) - holeMedianY);
+        if (dist < bestDist) { bestDist = dist; bestLayer = layer; }
+    }
+    return bestLayer;
+}
+
 function exportTemplateDXF(maxLength, maxWidth) {
     const btn = document.getElementById('export-template-dxf-btn');
     const orig = btn.textContent;
@@ -1505,6 +1531,9 @@ function exportTemplateDXF(maxLength, maxWidth) {
         const zSpan = Math.max(...allZ) - minZ;
         const useY  = zSpan < 100;
         const minP  = useY ? Math.min(...holes.map(h => h.yMm)) : minZ;
+
+        // Derive face name from Y-proximity to known mesh face layers (F1A, T1A, etc.)
+        const faceName = _detectFaceName(holes) ?? (useY ? 'T1A' : 'F1A');
 
         // Normalise to local coords, sort left→right then bottom→top, assign global seq number
         const plotHoles = holes
@@ -1600,7 +1629,7 @@ function exportTemplateDXF(maxLength, maxWidth) {
         holes.forEach(h => { byDia[h.holeDia] = (byDia[h.holeDia] || 0) + 1; });
         const sizeStr = Object.entries(byDia).map(([d, c]) => `${d}mm x${c}`).join('  ');
         TEXT(COL_MARGIN, baseY + 12,
-            `CAGE ${cageRef}  —  ${useY ? 'T1A' : 'F1A'} FACE PLATE TEMPLATE  |  Rules: max ${maxLength}L x ${maxWidth}W mm  |  ${totalPlates} plates (${vsPlates.length} VS + ${hsPlates.length} HS)  |  ${plotHoles.length} holes`,
+            `CAGE ${cageRef}  —  ${faceName} FACE PLATE TEMPLATE  |  Rules: max ${maxLength}L x ${maxWidth}W mm  |  ${totalPlates} plates (${vsPlates.length} VS + ${hsPlates.length} HS)  |  ${plotHoles.length} holes`,
             12, 'TEXT');
         TEXT(COL_MARGIN, baseY - 2,
             `25mm edge clearance  |  Hole dia = coupler OD + 2mm  |  Sizes: ${sizeStr}`,
