@@ -73,7 +73,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('export-struts-btn').addEventListener('click', () => exportEDB('struts'));
     document.getElementById('export-slab-btn').addEventListener('click',   () => exportSlabEDB());
     document.getElementById('export-report-btn').addEventListener('click', () => exportCageReport());
-    document.getElementById('export-template-dxf-btn').addEventListener('click', () => exportTemplateDXF());
+    document.getElementById('export-template-dxf-btn').addEventListener('click',      () => exportTemplateDXF(2000, 300));
+    document.getElementById('export-template-dxf-test-btn').addEventListener('click', () => exportTemplateDXF(1000, 150));
     document.getElementById('edb-wall-thickness').addEventListener('input', updateEDBComputedInfo);
 
     document.getElementById('page-prev').addEventListener('click', () => {
@@ -320,6 +321,8 @@ function displayResults(parser) {
 
     const templateDxfBtn = document.getElementById('export-template-dxf-btn');
     if (templateDxfBtn) templateDxfBtn.classList.toggle('hidden', _isSlabCage);
+    const templateDxfTestBtn = document.getElementById('export-template-dxf-test-btn');
+    if (templateDxfTestBtn) templateDxfTestBtn.classList.toggle('hidden', _isSlabCage);
     autoFillEDBInputs();
     _renderPRLPRCResults(prlPrcResult);
 }
@@ -1402,87 +1405,192 @@ function _parseIFCBeamHoles(ifcText) {
         .map(b => ({ xMm: b.xMm, zMm: b.zMm, holeDia: b.od + 2 }));
 }
 
-function exportTemplateDXF() {
-    const btn = document.getElementById('export-template-dxf-btn');
+// Breaks plotHoles into rectangular plates obeying maxLength (X) and maxWidth (Z) limits.
+// Each plate edge sits 25mm clear of the nearest hole edge.
+function _computePlates(plotHoles, maxLength, maxWidth) {
+    const CLEARANCE = 25;
+    if (!plotHoles.length) return [];
+
+    // Step 1: sort by Z and group into horizontal Z bands (width constraint)
+    const byZ = [...plotHoles].sort((a, b) => a.pz - b.pz);
+    const zBands = [];
+    let band = [byZ[0]];
+    let bMinZ = byZ[0].pz - byZ[0].holeDia / 2 - CLEARANCE;
+    let bMaxZ = byZ[0].pz + byZ[0].holeDia / 2 + CLEARANCE;
+
+    for (let i = 1; i < byZ.length; i++) {
+        const h = byZ[i];
+        const cMin = Math.min(bMinZ, h.pz - h.holeDia / 2 - CLEARANCE);
+        const cMax = Math.max(bMaxZ, h.pz + h.holeDia / 2 + CLEARANCE);
+        if (cMax - cMin > maxWidth) {
+            zBands.push(band);
+            band = [h];
+            bMinZ = h.pz - h.holeDia / 2 - CLEARANCE;
+            bMaxZ = h.pz + h.holeDia / 2 + CLEARANCE;
+        } else {
+            band.push(h); bMinZ = cMin; bMaxZ = cMax;
+        }
+    }
+    zBands.push(band);
+
+    // Step 2: within each Z band, sort by X and group by length constraint
+    const plates = [];
+    for (const zHoles of zBands) {
+        const byX = [...zHoles].sort((a, b) => a.px - b.px);
+        let grp = [byX[0]];
+        let gMinX = byX[0].px - byX[0].holeDia / 2 - CLEARANCE;
+        let gMaxX = byX[0].px + byX[0].holeDia / 2 + CLEARANCE;
+
+        for (let i = 1; i < byX.length; i++) {
+            const h  = byX[i];
+            const cMax = h.px + h.holeDia / 2 + CLEARANCE;
+            if (cMax - gMinX > maxLength) {
+                plates.push(grp);
+                grp  = [h];
+                gMinX = h.px - h.holeDia / 2 - CLEARANCE;
+                gMaxX = cMax;
+            } else {
+                grp.push(h); gMaxX = cMax;
+            }
+        }
+        plates.push(grp);
+    }
+
+    return plates.map((holes, idx) => {
+        const minX = Math.min(...holes.map(h => h.px - h.holeDia / 2)) - CLEARANCE;
+        const maxX = Math.max(...holes.map(h => h.px + h.holeDia / 2)) + CLEARANCE;
+        const minZ = Math.min(...holes.map(h => h.pz - h.holeDia / 2)) - CLEARANCE;
+        const maxZ = Math.max(...holes.map(h => h.pz + h.holeDia / 2)) + CLEARANCE;
+        return { id: idx + 1, holes, minX, maxX, minZ, maxZ,
+                 length: +(maxX - minX).toFixed(1), width: +(maxZ - minZ).toFixed(1) };
+    });
+}
+
+function exportTemplateDXF(maxLength, maxWidth) {
+    const btnProd = document.getElementById('export-template-dxf-btn');
+    const btnTest = document.getElementById('export-template-dxf-test-btn');
+    const btn  = maxLength === 2000 ? btnProd : btnTest;
     const orig = btn.textContent;
     btn.textContent = 'Generating…'; btn.disabled = true;
 
     try {
         if (!_rawIfcText) throw new Error('No IFC data loaded. Please analyse a cage first.');
         const holes = _parseIFCBeamHoles(_rawIfcText);
-        if (holes.length === 0) throw new Error('No VS/HS strut coupler holes found in this IFC.');
+        if (!holes.length) throw new Error('No VS/HS strut coupler holes found in this IFC.');
 
         const allX = holes.map(h => h.xMm), allZ = holes.map(h => h.zMm);
         const minX = Math.min(...allX), minZ = Math.min(...allZ);
-        const extW = Math.max(...allX) - minX, extH = Math.max(...allZ) - minZ;
 
+        // Normalise to local coords, sort left→right then bottom→top, assign global seq number
         const plotHoles = holes
             .map(h => ({ ...h, px: +(h.xMm - minX).toFixed(1), pz: +(h.zMm - minZ).toFixed(1) }))
             .sort((a, b) => a.px !== b.px ? a.px - b.px : a.pz - b.pz);
+        plotHoles.forEach((h, i) => { h.num = i + 1; });
 
-        const MARGIN = 100, TITLE_H = 70;
-        // Derive cage reference from filename
-        const fileEl = document.getElementById('ifc-file');
-        const fname  = fileEl?.files[0]?.name || 'CAGE';
+        const plates = _computePlates(plotHoles, maxLength, maxWidth);
+
+        const fileEl  = document.getElementById('ifc-file');
+        const fname   = fileEl?.files[0]?.name || 'CAGE';
         const cageRef = fname.replace(/\.[^.]+$/, '');
+        const suffix  = maxLength === 2000 ? 'prod' : 'test';
 
-        const dxf = [];
+        const dxf  = [];
         const emit = (...v) => v.forEach(x => dxf.push(String(x)));
         const LINE   = (x1,y1,x2,y2,lyr) => emit('0','LINE','8',lyr,'10',x1.toFixed(1),'20',y1.toFixed(1),'30','0.0','11',x2.toFixed(1),'21',y2.toFixed(1),'31','0.0');
         const CIRCLE = (cx,cy,r,lyr)     => emit('0','CIRCLE','8',lyr,'10',cx.toFixed(1),'20',cy.toFixed(1),'30','0.0','40',r.toFixed(2));
         const TEXT   = (x,y,txt,h,lyr)   => emit('0','TEXT','8',lyr,'10',x.toFixed(1),'20',y.toFixed(1),'30','0.0','40',h.toFixed(1),'1',String(txt));
+        // Small dimension: horizontal tick between x0 and x1 at Y=y, label centred above
+        const HDIM = (x0, x1, y, label) => {
+            LINE(x0, y, x1, y, 'DIMS');
+            LINE(x0, y - 4, x0, y + 4, 'DIMS');
+            LINE(x1, y - 4, x1, y + 4, 'DIMS');
+            TEXT((x0 + x1) / 2 - 4, y + 5, String(label), 7, 'DIMS');
+        };
+        // Small dimension: vertical tick between z0 and z1 at X=x, label to right
+        const VDIM = (x, z0, z1, label) => {
+            LINE(x, z0, x, z1, 'DIMS');
+            LINE(x - 4, z0, x + 4, z0, 'DIMS');
+            LINE(x - 4, z1, x + 4, z1, 'DIMS');
+            TEXT(x + 5, (z0 + z1) / 2, String(label), 7, 'DIMS');
+        };
 
         emit('0','SECTION','2','HEADER','9','$ACADVER','1','AC1009','0','ENDSEC');
         emit('0','SECTION','2','ENTITIES');
 
-        // Border
-        const Bx0 = -MARGIN, By0 = -(MARGIN + TITLE_H), Bx1 = extW + MARGIN, By1 = extH + MARGIN;
-        LINE(Bx0,By0,Bx1,By0,'PLATE_OUTLINE'); LINE(Bx1,By0,Bx1,By1,'PLATE_OUTLINE');
-        LINE(Bx1,By1,Bx0,By1,'PLATE_OUTLINE'); LINE(Bx0,By1,Bx0,By0,'PLATE_OUTLINE');
-        LINE(Bx0,-MARGIN,Bx1,-MARGIN,'PLATE_OUTLINE');
+        // Layout constants
+        const COL_MARGIN = 80;   // DXF X offset for all plates
+        const DRAW_PAD   = 50;   // padding around each plate in its drawing area
+        const PLATE_GAP  = 70;   // vertical gap between successive plates
+        const LABEL_H    = 22;   // height reserved above each plate for its label
 
-        // Title block
-        TEXT(Bx0+10,-MARGIN+45,`CAGE ${cageRef} TEMPLATE — F1A FACE ELEVATION`,22,'TEXT');
-        TEXT(Bx0+10,-MARGIN+22,`Scale 1:15  |  Coordinates relative to coupler extent origin`,10,'TEXT');
-        TEXT(Bx0+10,-MARGIN+8, `Hole dia = coupler body OD (IFCBEAM HEIGHT) + 2mm tolerance`,10,'TEXT');
+        let baseY = DRAW_PAD;    // current Y baseline for next plate
 
-        const byDia = {}; holes.forEach(h => { byDia[h.holeDia] = (byDia[h.holeDia] || 0) + 1; });
-        TEXT(Bx0+10,-MARGIN-12,`Sizes: ${Object.entries(byDia).map(([d,c]) => `${d}mm x${c}`).join('  ')}`,9,'TEXT');
+        for (const plate of plates) {
+            const ox = COL_MARGIN;                // DXF X of plate left edge
+            const oz = baseY;                     // DXF Z (Y in DXF) of plate bottom edge
 
-        // Span dimensions
-        const dimY = -MARGIN + 8;
-        LINE(0,dimY,extW,dimY,'DIMS'); LINE(0,dimY-6,0,dimY+6,'DIMS'); LINE(extW,dimY-6,extW,dimY+6,'DIMS');
-        TEXT(extW/2-40,dimY+8,`${Math.round(extW)} mm`,10,'DIMS');
-        const dimX = -MARGIN + 8;
-        LINE(dimX,0,dimX,extH,'DIMS'); LINE(dimX-6,0,dimX+6,0,'DIMS'); LINE(dimX-6,extH,dimX+6,extH,'DIMS');
-        TEXT(dimX-50,extH/2,`${Math.round(extH)} mm`,10,'DIMS');
+            // ── Plate outline
+            LINE(ox,              oz,              ox + plate.length, oz,              'PLATE_OUTLINE');
+            LINE(ox + plate.length, oz,            ox + plate.length, oz + plate.width,'PLATE_OUTLINE');
+            LINE(ox + plate.length, oz + plate.width, ox,            oz + plate.width,'PLATE_OUTLINE');
+            LINE(ox,              oz + plate.width, ox,              oz,              'PLATE_OUTLINE');
 
-        // Tick marks
-        const seenX = new Set();
-        plotHoles.forEach(h => {
-            const rx = Math.round(h.px);
-            if (!seenX.has(rx)) { seenX.add(rx); LINE(h.px,-15,h.px,-35,'DIMS'); TEXT(h.px-15,-50,`${rx}`,8,'DIMS'); }
-        });
-        const seenZ = new Set();
-        plotHoles.forEach(h => {
-            const rz = Math.round(h.pz);
-            if (!seenZ.has(rz)) { seenZ.add(rz); LINE(-15,h.pz,-35,h.pz,'DIMS'); TEXT(-80,h.pz-4,`${rz}`,8,'DIMS'); }
-        });
+            // ── Plate ID + dimensions label (above plate)
+            TEXT(ox, oz + plate.width + 6,
+                `PLATE-${String(plate.id).padStart(2,'0')}  ${Math.round(plate.length)} x ${Math.round(plate.width)} mm  (${plate.holes.length} holes)`,
+                10, 'TEXT');
 
-        // Holes
-        plotHoles.forEach((h, i) => {
-            const holeR = h.holeDia / 2;
-            const label = `${cageRef}-CPLR-SID-${String(i + 1).padStart(3, '0')}`;
-            CIRCLE(h.px, h.pz, holeR, 'HOLES');
-            TEXT(h.px - holeR, h.pz + holeR + 5, label, 7, 'TEXT');
-        });
+            // ── Overall plate dimension: length (below plate)
+            HDIM(ox, ox + plate.length, oz - 20, `${Math.round(plate.length)} mm`);
+
+            // ── Overall plate dimension: width (left of plate)
+            VDIM(ox - 20, oz, oz + plate.width, `${Math.round(plate.width)} mm`);
+
+            // ── Holes
+            for (const h of plate.holes) {
+                const hx = ox + (h.px - plate.minX);
+                const hz = oz + (h.pz - plate.minZ);
+                const r  = h.holeDia / 2;
+                CIRCLE(hx, hz, r, 'HOLES');
+                TEXT(hx - r, hz + r + 3, `${cageRef}-CPLR-${String(h.num).padStart(3,'0')}`, 6, 'TEXT');
+            }
+
+            // ── Clearance dims: left hole → plate left edge  (25mm)
+            const byPx  = [...plate.holes].sort((a, b) => a.px - b.px);
+            const byPz  = [...plate.holes].sort((a, b) => a.pz - b.pz);
+            const leftH  = byPx[0],  rightH = byPx[byPx.length - 1];
+            const botH   = byPz[0],  topH   = byPz[byPz.length - 1];
+
+            const lhx = ox + (leftH.px  - plate.minX),  lhz = oz + (leftH.pz  - plate.minZ);
+            const rhx = ox + (rightH.px - plate.minX),  rhz = oz + (rightH.pz - plate.minZ);
+            const bhx = ox + (botH.px   - plate.minX),  bhz = oz + (botH.pz   - plate.minZ);
+            const thx = ox + (topH.px   - plate.minX),  thz = oz + (topH.pz   - plate.minZ);
+
+            HDIM(ox,                lhx - leftH.holeDia / 2,  lhz,  '25');   // left clearance
+            HDIM(rhx + rightH.holeDia / 2, ox + plate.length, rhz,  '25');   // right clearance
+            VDIM(bhx, oz,                  bhz - botH.holeDia / 2,   '25');  // bottom clearance
+            VDIM(thx, thz + topH.holeDia / 2, oz + plate.width,      '25');  // top clearance
+
+            baseY += plate.width + DRAW_PAD + PLATE_GAP + LABEL_H;
+        }
+
+        // ── Global title (above all plates)
+        const byDia = {};
+        holes.forEach(h => { byDia[h.holeDia] = (byDia[h.holeDia] || 0) + 1; });
+        const sizeStr = Object.entries(byDia).map(([d, c]) => `${d}mm x${c}`).join('  ');
+        TEXT(COL_MARGIN, baseY + 12,
+            `CAGE ${cageRef}  —  F1A FACE PLATE TEMPLATE  |  Rules: max ${maxLength}L x ${maxWidth}W mm  |  ${plates.length} plates  |  ${plotHoles.length} holes`,
+            12, 'TEXT');
+        TEXT(COL_MARGIN, baseY - 2,
+            `25mm edge clearance from hole edge to plate edge  |  Hole dia = coupler OD + 2mm  |  Sizes: ${sizeStr}`,
+            9, 'TEXT');
 
         emit('0','ENDSEC','0','EOF');
 
         const blob = new Blob([dxf.join('\n')], { type: 'application/dxf' });
         const url  = URL.createObjectURL(blob);
         const a    = document.createElement('a');
-        a.href = url; a.download = `${cageRef}-template.dxf`;
+        a.href = url; a.download = `${cageRef}-template-${suffix}.dxf`;
         document.body.appendChild(a); a.click();
         document.body.removeChild(a); URL.revokeObjectURL(url);
 
