@@ -73,8 +73,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('export-struts-btn').addEventListener('click', () => exportEDB('struts'));
     document.getElementById('export-slab-btn').addEventListener('click',   () => exportSlabEDB());
     document.getElementById('export-report-btn').addEventListener('click', () => exportCageReport());
-    document.getElementById('export-template-dxf-btn').addEventListener('click',      () => exportTemplateDXF(2000, 300));
-    document.getElementById('export-template-dxf-test-btn').addEventListener('click', () => exportTemplateDXF(1000, 150));
+    document.getElementById('export-template-dxf-btn').addEventListener('click', () => exportTemplateDXF(2000, 300));
     document.getElementById('edb-wall-thickness').addEventListener('input', updateEDBComputedInfo);
 
     document.getElementById('page-prev').addEventListener('click', () => {
@@ -320,9 +319,7 @@ function displayResults(parser) {
     if (reportBtn) reportBtn.classList.toggle('hidden', rejected);
 
     const templateDxfBtn = document.getElementById('export-template-dxf-btn');
-    if (templateDxfBtn) templateDxfBtn.classList.toggle('hidden', _isSlabCage);
-    const templateDxfTestBtn = document.getElementById('export-template-dxf-test-btn');
-    if (templateDxfTestBtn) templateDxfTestBtn.classList.toggle('hidden', _isSlabCage);
+    if (templateDxfBtn) templateDxfBtn.classList.remove('hidden');
     autoFillEDBInputs();
     _renderPRLPRCResults(prlPrcResult);
 }
@@ -1472,9 +1469,7 @@ function _computePlates(plotHoles, maxLength, maxWidth) {
 }
 
 function exportTemplateDXF(maxLength, maxWidth) {
-    const btnProd = document.getElementById('export-template-dxf-btn');
-    const btnTest = document.getElementById('export-template-dxf-test-btn');
-    const btn  = maxLength === 2000 ? btnProd : btnTest;
+    const btn = document.getElementById('export-template-dxf-btn');
     const orig = btn.textContent;
     btn.textContent = 'Generating…'; btn.disabled = true;
 
