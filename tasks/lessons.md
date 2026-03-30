@@ -228,3 +228,20 @@ const holeMedian = hasFN ? median(holes.map(h => h.yMm)) : median(holes.map(h =>
 **Why:** Layer naming is the semantic ground truth. Coupler geometry is an accidental consequence of cage orientation — it can mislead.
 
 ---
+
+## Template DXF — yMid Filter Silently Drops Multi-Face Couplers (March 2026)
+
+**Mistake:** `_parseIFCBeamHoles` filtered by `yMm > yMid` to select the "F1A face". For P7349 (a multi-layer wall cage with F1A, F3A, N1A, N3A, N5A, F5A faces), 118 of 162 VS/HS holes were silently dropped — only 44 survived. No warning was shown.
+
+**Root cause:** `yMid` was a blunt global midpoint of all IFCBEAM Y values. For complex cages with couplers penetrating multiple mesh faces at different depths, any single threshold drops all but one face.
+
+**Rule:** Never filter coupler holes by yMid. Instead:
+1. `_parseIFCBeamHoles` returns ALL VS/HS holes (no Y filter)
+2. `_bucketHolesByFace` assigns each hole to its nearest face layer by proximity (Y for wall F/N cages, Z for slab T/B cages)
+3. `exportTemplateDXF` loops over face buckets and draws a separate labelled section per face
+
+**Why this matters:** Every face with couplers needs its own formwork template plate. Silently dropping a face means those holes never get drilled — a physical fabrication error.
+
+**Verified P7349:** Old tool: 44 HS holes (F1A face only). New tool: 162 holes across F1A, N3A, F3A, N5A — 4 separate template sections.
+
+---
