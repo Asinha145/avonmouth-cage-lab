@@ -642,7 +642,6 @@ function displayLayerWeightStats() {
         const displayLayer = isInferred
             ? layer.replace(' \u2691', '') + ' <span class="inferred-badge" title="ATK-inferred">\u2691 ATK-inferred</span>'
             : layer;
-        const pct = totalWeight > 0 ? (data.weight / totalWeight * 100) : 0;
         tr.innerHTML = `
             <td><strong>${isInferred ? displayLayer : layer}</strong>${isUnknown ? ' ⚠' : ''}</td>
             <td><span class="bar-type-badge ${(data.type || '').toLowerCase().replace(/\s+/g, '-')}">${data.type}</span></td>
