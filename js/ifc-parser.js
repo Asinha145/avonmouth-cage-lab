@@ -249,11 +249,6 @@ class IFCParser {
                 else if (/^dim[_\s]a$/i.test(n)) { bar.Dim_A = parseFloat(v) || null; }
                 else if (/^dim[_\s]b$/i.test(n)) { bar.Dim_B = parseFloat(v) || null; }
                 else if (/^dim[_\s]c$/i.test(n)) { bar.Dim_C = parseFloat(v) || null; }
-                // ── Coupler head weight (IFCBEAM ATK Couplers Parts pset)
-                else if (nl === 'coupler weight') {
-                    const w = parseFloat(v);
-                    if (w > 0) bar.Coupler_Weight = w;
-                }
                 // ── ATK Couplers Parts layer name (IFCBEAM — same format as ATK_Layer_Name on rebars)
                 else if (nl === 'layer name' && psetName === 'ATK Couplers Parts' && !bar.ATK_Layer_Name) {
                     bar.ATK_Layer_Name = v;
@@ -287,7 +282,7 @@ class IFCParser {
                 Name               : '',
                 Avonmouth_Layer_Set: null,
                 ATK_Layer_Name     : null,
-                Coupler_Weight     : null,
+
             };
             this.extractProperties(m[1], obj);
             couplerMap.set(parseInt(m[1], 10), {
@@ -295,7 +290,7 @@ class IFCParser {
                 globalId     : m[2],
                 layer        : obj.Avonmouth_Layer_Set,
                 atkLayerName : obj.ATK_Layer_Name,
-                weight       : obj.Coupler_Weight,
+
             });
         });
         return couplerMap;
