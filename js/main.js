@@ -38,7 +38,8 @@ let _wasm3DDims     = null;
 // C01 rejection state — gating EDB and report exports
 let _parserRejected = false;
 // Slab cage flag — set after analysis, gates slab vs wall EDB buttons
-let _isSlabCage = false;
+let _isSlabCage  = false;
+let _rawIfcText  = null;   // raw IFC text retained for template DXF generation
 
 // ── Initialise viewer on page load ─────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
@@ -83,6 +84,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('export-struts-btn').addEventListener('click', () => exportEDB('struts'));
     document.getElementById('export-slab-btn').addEventListener('click',   () => exportSlabEDB());
     document.getElementById('export-report-btn').addEventListener('click', () => exportCageReport());
+    document.getElementById('export-template-dxf-btn').addEventListener('click', () => exportTemplateDXF());
     document.getElementById('edb-wall-thickness').addEventListener('input', updateEDBComputedInfo);
 
     document.getElementById('page-prev').addEventListener('click', () => {
@@ -166,6 +168,7 @@ async function processFile() {
         if (!content.includes('IFCREINFORCINGBAR'))
             throw new Error('No reinforcing bars found in this file.');
 
+        _rawIfcText = content;
         updateProgress(40, 'Analysing cage structure…');
         const parser = new IFCParser();
         allData     = await parser.parseFile(content);
@@ -326,6 +329,9 @@ function displayResults(parser) {
 
     const reportBtn = document.getElementById('export-report-btn');
     if (reportBtn) reportBtn.classList.toggle('hidden', rejected);
+
+    const templateDxfBtn = document.getElementById('export-template-dxf-btn');
+    if (templateDxfBtn) templateDxfBtn.classList.toggle('hidden', _isSlabCage);
     autoFillEDBInputs();
     _renderPRLPRCResults(prlPrcResult);
 }
@@ -1351,6 +1357,173 @@ async function exportCageReport() {
     } catch (e) {
         console.error('[exportCageReport]', e);
         alert(`Report generation failed: ${e.message}`);
+    } finally {
+        btn.textContent = orig; btn.disabled = false;
+    }
+}
+
+// ── Template DXF — F1A face elevation with VS/HS strut coupler holes ──────────
+// Reads IFCBEAM entities directly from raw IFC text.
+// Filters: F1A face (Y > midpoint), Layer/Set = VS or HS, OD from ATK EMBEDMENTS HEIGHT.
+// Hole size = coupler body OD + 2mm tolerance.
+
+function _parseIFCBeamHoles(ifcText) {
+    const getEntity = id => { const m = ifcText.match(new RegExp(`#${id}=([^\n]+)`)); return m ? m[1] : null; };
+    const parseCoords = s => [...s.matchAll(/[-+]?\d+\.?\d*(?:[Ee][+-]?\d+)?/g)].map(m => parseFloat(m[0]));
+
+    // Absolute placement lookup: lpId → [X, Y, Z]
+    const absPos = {};
+    for (const m of ifcText.matchAll(/#(\d+)=IFCLOCALPLACEMENT\(\$,#(\d+)\)/g)) {
+        const [, lpId, axId] = m;
+        const ax = getEntity(axId); if (!ax?.includes('IFCAXIS2PLACEMENT3D')) continue;
+        const cpId = ax.match(/#(\d+)/)?.[1]; if (!cpId) continue;
+        const cp = getEntity(cpId); if (!cp?.includes('IFCCARTESIANPOINT')) continue;
+        const inner = cp.match(/\(([^)]+)\)/)?.[1]; if (!inner) continue;
+        const c = parseCoords(inner); if (c.length === 3) absPos[lpId] = c;
+    }
+
+    // Coupler OD per IFCBEAM from ATK EMBEDMENTS pset HEIGHT
+    const beamOD = {};
+    for (const m of ifcText.matchAll(/#(\d+)=IFCRELDEFINESBYPROPERTIES\([^;]+;/g)) {
+        const rel = m[0];
+        const psetId = rel.match(/,#(\d+)\s*\)\s*;/)?.[1]; if (!psetId) continue;
+        const pset = getEntity(psetId); if (!pset?.includes('ATK EMBEDMENTS')) continue;
+        let od = null;
+        for (const pid of [...pset.matchAll(/#(\d+)/g)].map(x => x[1])) {
+            const prop = getEntity(pid);
+            if (prop?.includes("'HEIGHT'")) { const v = prop.match(/IFCLENGTHMEASURE\(([\d.]+)\)/)?.[1]; if (v) { od = parseFloat(v); break; } }
+        }
+        if (od === null) continue;
+        const mm = rel.match(/,\(([^)]*#[^)]*)\),#\d+\)/); if (!mm) continue;
+        for (const b of mm[1].matchAll(/#(\d+)/g)) beamOD[b[1]] = od;
+    }
+
+    // Layer/Set per IFCBEAM from Avonmouth pset
+    const beamLayer = {};
+    for (const m of ifcText.matchAll(/#(\d+)=IFCRELDEFINESBYPROPERTIES\([^;]+;/g)) {
+        const rel = m[0];
+        const psetId = rel.match(/,#(\d+)\s*\)\s*;/)?.[1]; if (!psetId) continue;
+        const pset = getEntity(psetId); if (!pset?.includes("'Avonmouth'")) continue;
+        let lv = null;
+        for (const pid of [...pset.matchAll(/#(\d+)/g)].map(x => x[1])) {
+            const prop = getEntity(pid);
+            if (prop?.includes("'Layer/Set'")) { const v = prop.match(/IFCTEXT\('([^']+)'\)/)?.[1]; if (v) { lv = v; break; } }
+        }
+        if (!lv) continue;
+        const mm = rel.match(/,\(([^)]*#[^)]*)\),#\d+\)/); if (!mm) continue;
+        for (const b of mm[1].matchAll(/#(\d+)/g)) {
+            const e = getEntity(b[1]); if (e?.includes('IFCBEAM(')) beamLayer[b[1]] = lv;
+        }
+    }
+
+    // Collect all IFCBEAM positions
+    const beams = [];
+    for (const m of ifcText.matchAll(/#(\d+)=IFCBEAM\(([^;]+);/g)) {
+        const [, bid, bdata] = m;
+        for (const ref of bdata.matchAll(/#(\d+)/g)) {
+            if (absPos[ref[1]]) {
+                const [bx, by, bz] = absPos[ref[1]];
+                beams.push({ xMm: bx, yMm: by, zMm: bz, od: beamOD[bid] ?? null, layer: beamLayer[bid] ?? null });
+                break;
+            }
+        }
+    }
+    if (beams.length === 0) return [];
+
+    const yVals = beams.map(b => b.yMm);
+    const yMid  = (Math.min(...yVals) + Math.max(...yVals)) / 2;
+    return beams
+        .filter(b => b.yMm > yMid && b.od !== null && /^[VH]S/i.test(b.layer || ''))
+        .map(b => ({ xMm: b.xMm, zMm: b.zMm, holeDia: b.od + 2 }));
+}
+
+function exportTemplateDXF() {
+    const btn = document.getElementById('export-template-dxf-btn');
+    const orig = btn.textContent;
+    btn.textContent = 'Generating…'; btn.disabled = true;
+
+    try {
+        if (!_rawIfcText) throw new Error('No IFC data loaded. Please analyse a cage first.');
+        const holes = _parseIFCBeamHoles(_rawIfcText);
+        if (holes.length === 0) throw new Error('No VS/HS strut coupler holes found in this IFC.');
+
+        const allX = holes.map(h => h.xMm), allZ = holes.map(h => h.zMm);
+        const minX = Math.min(...allX), minZ = Math.min(...allZ);
+        const extW = Math.max(...allX) - minX, extH = Math.max(...allZ) - minZ;
+
+        const plotHoles = holes
+            .map(h => ({ ...h, px: +(h.xMm - minX).toFixed(1), pz: +(h.zMm - minZ).toFixed(1) }))
+            .sort((a, b) => a.px !== b.px ? a.px - b.px : a.pz - b.pz);
+
+        const MARGIN = 100, TITLE_H = 70;
+        // Derive cage reference from filename
+        const fileEl = document.getElementById('ifc-file');
+        const fname  = fileEl?.files[0]?.name || 'CAGE';
+        const cageRef = fname.replace(/\.[^.]+$/, '');
+
+        const dxf = [];
+        const emit = (...v) => v.forEach(x => dxf.push(String(x)));
+        const LINE   = (x1,y1,x2,y2,lyr) => emit('0','LINE','8',lyr,'10',x1.toFixed(1),'20',y1.toFixed(1),'30','0.0','11',x2.toFixed(1),'21',y2.toFixed(1),'31','0.0');
+        const CIRCLE = (cx,cy,r,lyr)     => emit('0','CIRCLE','8',lyr,'10',cx.toFixed(1),'20',cy.toFixed(1),'30','0.0','40',r.toFixed(2));
+        const TEXT   = (x,y,txt,h,lyr)   => emit('0','TEXT','8',lyr,'10',x.toFixed(1),'20',y.toFixed(1),'30','0.0','40',h.toFixed(1),'1',String(txt));
+
+        emit('0','SECTION','2','HEADER','9','$ACADVER','1','AC1009','0','ENDSEC');
+        emit('0','SECTION','2','ENTITIES');
+
+        // Border
+        const Bx0 = -MARGIN, By0 = -(MARGIN + TITLE_H), Bx1 = extW + MARGIN, By1 = extH + MARGIN;
+        LINE(Bx0,By0,Bx1,By0,'PLATE_OUTLINE'); LINE(Bx1,By0,Bx1,By1,'PLATE_OUTLINE');
+        LINE(Bx1,By1,Bx0,By1,'PLATE_OUTLINE'); LINE(Bx0,By1,Bx0,By0,'PLATE_OUTLINE');
+        LINE(Bx0,-MARGIN,Bx1,-MARGIN,'PLATE_OUTLINE');
+
+        // Title block
+        TEXT(Bx0+10,-MARGIN+45,`CAGE ${cageRef} TEMPLATE — F1A FACE ELEVATION`,22,'TEXT');
+        TEXT(Bx0+10,-MARGIN+22,`Scale 1:15  |  Coordinates relative to coupler extent origin`,10,'TEXT');
+        TEXT(Bx0+10,-MARGIN+8, `Hole dia = coupler body OD (IFCBEAM HEIGHT) + 2mm tolerance`,10,'TEXT');
+
+        const byDia = {}; holes.forEach(h => { byDia[h.holeDia] = (byDia[h.holeDia] || 0) + 1; });
+        TEXT(Bx0+10,-MARGIN-12,`Sizes: ${Object.entries(byDia).map(([d,c]) => `${d}mm x${c}`).join('  ')}`,9,'TEXT');
+
+        // Span dimensions
+        const dimY = -MARGIN + 8;
+        LINE(0,dimY,extW,dimY,'DIMS'); LINE(0,dimY-6,0,dimY+6,'DIMS'); LINE(extW,dimY-6,extW,dimY+6,'DIMS');
+        TEXT(extW/2-40,dimY+8,`${Math.round(extW)} mm`,10,'DIMS');
+        const dimX = -MARGIN + 8;
+        LINE(dimX,0,dimX,extH,'DIMS'); LINE(dimX-6,0,dimX+6,0,'DIMS'); LINE(dimX-6,extH,dimX+6,extH,'DIMS');
+        TEXT(dimX-50,extH/2,`${Math.round(extH)} mm`,10,'DIMS');
+
+        // Tick marks
+        const seenX = new Set();
+        plotHoles.forEach(h => {
+            const rx = Math.round(h.px);
+            if (!seenX.has(rx)) { seenX.add(rx); LINE(h.px,-15,h.px,-35,'DIMS'); TEXT(h.px-15,-50,`${rx}`,8,'DIMS'); }
+        });
+        const seenZ = new Set();
+        plotHoles.forEach(h => {
+            const rz = Math.round(h.pz);
+            if (!seenZ.has(rz)) { seenZ.add(rz); LINE(-15,h.pz,-35,h.pz,'DIMS'); TEXT(-80,h.pz-4,`${rz}`,8,'DIMS'); }
+        });
+
+        // Holes
+        plotHoles.forEach((h, i) => {
+            const holeR = h.holeDia / 2;
+            const label = `${cageRef}-CPLR-SID-${String(i + 1).padStart(3, '0')}`;
+            CIRCLE(h.px, h.pz, holeR, 'HOLES');
+            TEXT(h.px - holeR, h.pz + holeR + 5, label, 7, 'TEXT');
+        });
+
+        emit('0','ENDSEC','0','EOF');
+
+        const blob = new Blob([dxf.join('\n')], { type: 'application/dxf' });
+        const url  = URL.createObjectURL(blob);
+        const a    = document.createElement('a');
+        a.href = url; a.download = `${cageRef}-template.dxf`;
+        document.body.appendChild(a); a.click();
+        document.body.removeChild(a); URL.revokeObjectURL(url);
+
+    } catch (e) {
+        console.error('[exportTemplateDXF]', e);
+        alert(`Template DXF failed: ${e.message}`);
     } finally {
         btn.textContent = orig; btn.disabled = false;
     }
