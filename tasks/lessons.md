@@ -135,3 +135,30 @@ In `_buildDimensions(cageAxisName)`, use `assignLW(spanX, spanY)`:
 **Why it matters:** With 24 bars spanning 4805mm: `4805/24 = 200mm` (appeared correct by coincidence), `4805/23 = 208.9 → 210mm` (correct). On other cages the coincidence would not hold.
 
 ---
+
+## IFCLOCALPLACEMENT — Never Assume `$` (Absolute) First Arg (March 2026)
+
+**Mistake:** `_parseIFCBeamHoles` only collected placements matching `IFCLOCALPLACEMENT($, #axId)` — the `$` meaning no parent (absolute global). This returned 0 beam positions for RF35 C01 because all 224 IFCBEAM placements there use a parent ref: `IFCLOCALPLACEMENT(#14, #axId)`.
+
+**Root cause pattern:** Developed and tested against one cage (1613) where Tekla happened to export absolute placements. A different Tekla export version/setting uses relative placements throughout.
+
+**Rule:** Always match `IFCLOCALPLACEMENT` with any first argument:
+```javascript
+// Wrong — only matches absolute
+/#(\d+)=IFCLOCALPLACEMENT\(\$,#(\d+)\)/g
+
+// Correct — matches $ or any parent ref
+/#(\d+)=IFCLOCALPLACEMENT\([^,)]*,#(\d+)\)/g
+```
+
+**Why it still works:** Tekla always encodes the element's **global BNG coordinates** directly in its own `IFCAXIS2PLACEMENT3D → IFCCARTESIANPOINT`, regardless of whether there is a parent placement. No matrix chain walk is needed.
+
+**Diagnostic checklist when a parser returns 0 beam positions:**
+1. Count raw `IFCBEAM` entities — are they present at all?
+2. Survey `IFCLOCALPLACEMENT` first-arg patterns — any `#N` instead of `$`?
+3. Check one CartesianPoint manually — are the coords plausibly global (BNG scale)?
+4. If yes to 2 and 3 — broaden the regex to `[^,)]*`.
+
+**Reference:** `docs/ifc-entity-investigation.md` — full methodology and diagnostic script template.
+
+---
