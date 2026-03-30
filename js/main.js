@@ -1398,10 +1398,8 @@ function _parseIFCBeamHoles(ifcText) {
     }
     if (beams.length === 0) return [];
 
-    const yVals = beams.map(b => b.yMm);
-    const yMid  = (Math.min(...yVals) + Math.max(...yVals)) / 2;
     return beams
-        .filter(b => b.yMm > yMid && b.od !== null && /^[VH]S/i.test(b.layer || ''))
+        .filter(b => b.od !== null && /^[VH]S/i.test(b.layer || ''))
         .map(b => ({ xMm: b.xMm, yMm: b.yMm, zMm: b.zMm, holeDia: b.od + 2, layer: b.layer }));
 }
 
@@ -1518,6 +1516,50 @@ function _detectFaceName(holes) {
     return bestLayer;
 }
 
+// Assigns every hole to its nearest mesh face layer (F1A/N1A or T1A/B1A) by Y or Z proximity.
+// Returns { 'F1A': [...], 'N1A': [...] } — only populated faces included.
+// Fallback when allData has no face layers: split by yMid of the hole set itself.
+function _bucketHolesByFace(holes) {
+    const faceRe = /^[FNTB]\d/i;
+    const layerCoords = {};
+    for (const bar of allData) {
+        const layer = bar.Avonmouth_Layer_Set;
+        if (!layer || !faceRe.test(layer)) continue;
+        const y = bar.Start_Y ?? bar.End_Y;
+        const z = bar.Start_Z ?? bar.End_Z;
+        if (y == null && z == null) continue;
+        if (!layerCoords[layer]) layerCoords[layer] = [];
+        layerCoords[layer].push({ y, z });
+    }
+    if (!Object.keys(layerCoords).length) {
+        // Fallback: split by hole yMid
+        const yVals = holes.map(h => h.yMm);
+        const yMid = (Math.min(...yVals) + Math.max(...yVals)) / 2;
+        const result = {};
+        const above = holes.filter(h => h.yMm > yMid);
+        const below = holes.filter(h => h.yMm <= yMid);
+        if (above.length) result['F1A'] = above;
+        if (below.length) result['N1A'] = below;
+        return Object.keys(result).length ? result : { 'FACE': holes };
+    }
+    const median = arr => { const s = [...arr].filter(v => v != null).sort((a, b) => a - b); return s[Math.floor(s.length / 2)]; };
+    const hasFN = Object.keys(layerCoords).some(l => /^[FN]\d/i.test(l));
+    const faceMedians = {};
+    for (const [layer, pts] of Object.entries(layerCoords))
+        faceMedians[layer] = hasFN ? median(pts.map(p => p.y)) : median(pts.map(p => p.z));
+    const buckets = {};
+    for (const hole of holes) {
+        const val = hasFN ? hole.yMm : hole.zMm;
+        let best = null, bestDist = Infinity;
+        for (const [layer, med] of Object.entries(faceMedians)) {
+            const d = Math.abs(med - val); if (d < bestDist) { bestDist = d; best = layer; }
+        }
+        if (!buckets[best]) buckets[best] = [];
+        buckets[best].push(hole);
+    }
+    return Object.fromEntries(Object.entries(buckets).filter(([, h]) => h.length > 0));
+}
+
 function exportTemplateDXF(maxLength, maxWidth) {
     const btn = document.getElementById('export-template-dxf-btn');
     const orig = btn.textContent;
@@ -1525,28 +1567,13 @@ function exportTemplateDXF(maxLength, maxWidth) {
 
     try {
         if (!_rawIfcText) throw new Error('No IFC data loaded. Please analyse a cage first.');
-        const holes = _parseIFCBeamHoles(_rawIfcText);
-        if (!holes.length) throw new Error('No VS/HS strut coupler holes found in this IFC.');
+        const allHoles = _parseIFCBeamHoles(_rawIfcText);
+        if (!allHoles.length) throw new Error('No VS/HS strut coupler holes found in this IFC.');
 
-        const allX = holes.map(h => h.xMm), allZ = holes.map(h => h.zMm);
-        const minX = Math.min(...allX), minZ = Math.min(...allZ);
-
-        // Detect face plane: wall cage = X-Z (Z spans height), slab cage = X-Y (Z is constant)
-        // If Z range < 100mm, holes lie in the X-Y plane — use Y as the second plate axis.
-        const zSpan = Math.max(...allZ) - minZ;
-        const useY  = zSpan < 100;
-        const minP  = useY ? Math.min(...holes.map(h => h.yMm)) : minZ;
-
-        // Derive face name from Y-proximity to known mesh face layers (F1A, T1A, etc.)
-        const faceName = _detectFaceName(holes) ?? (useY ? 'T1A' : 'F1A');
-
-        // Normalise to local coords, sort left→right then bottom→top, assign global seq number
-        const plotHoles = holes
-            .map(h => ({ ...h, px: +(h.xMm - minX).toFixed(1), pz: +((useY ? h.yMm : h.zMm) - minP).toFixed(1) }))
-            .sort((a, b) => a.px !== b.px ? a.px - b.px : a.pz - b.pz);
-        plotHoles.forEach((h, i) => { h.num = i + 1; });
-
-        const { vsPlates, hsPlates } = _computePlates(plotHoles, maxLength, maxWidth);
+        // Bucket holes by face (F1A/N1A or T1A/B1A) using proximity to face layer bar positions
+        const faceBuckets = _bucketHolesByFace(allHoles);
+        // Shared X origin across all faces so plates align horizontally in the DXF
+        const globalMinX = Math.min(...allHoles.map(h => h.xMm));
 
         const fileEl  = document.getElementById('ifc-file');
         const fname   = fileEl?.files[0]?.name || 'CAGE';
@@ -1625,16 +1652,42 @@ function exportTemplateDXF(maxLength, maxWidth) {
             baseY += 20; // extra gap between VS and HS sections
         };
 
-        drawPlates(vsPlates, 'VS PLATES — Vertical Struts (long axis = Z)');
-        drawPlates(hsPlates, 'HS PLATES — Horizontal Struts (long axis = X)');
+        // Draw one section per face
+        let totalPlates = 0, totalVS = 0, totalHS = 0;
+        for (const [faceName, faceHoles] of Object.entries(faceBuckets)) {
+            // Detect face plane per face group
+            const faceZ = faceHoles.map(h => h.zMm);
+            const zSpan = Math.max(...faceZ) - Math.min(...faceZ);
+            const useY  = zSpan < 100;
+            const minP  = useY ? Math.min(...faceHoles.map(h => h.yMm)) : Math.min(...faceZ);
 
-        // Global title above everything
-        const totalPlates = vsPlates.length + hsPlates.length;
+            const plotHoles = faceHoles
+                .map(h => ({ ...h, px: +(h.xMm - globalMinX).toFixed(1), pz: +((useY ? h.yMm : h.zMm) - minP).toFixed(1) }))
+                .sort((a, b) => a.px !== b.px ? a.px - b.px : a.pz - b.pz);
+            plotHoles.forEach((h, i) => { h.num = i + 1; });
+
+            const { vsPlates, hsPlates } = _computePlates(plotHoles, maxLength, maxWidth);
+            totalPlates += vsPlates.length + hsPlates.length;
+            totalVS += vsPlates.length; totalHS += hsPlates.length;
+
+            // Face section header
+            TEXT(COL_MARGIN, baseY + 15,
+                `══════  ${faceName} FACE  ══════  ${faceHoles.length} holes  |  ${vsPlates.length} VS plates + ${hsPlates.length} HS plates`,
+                14, 'TEXT');
+            baseY += 40;
+
+            drawPlates(vsPlates, `VS PLATES — Vertical Struts`);
+            drawPlates(hsPlates, `HS PLATES — Horizontal Struts`);
+            baseY += 30; // gap between face sections
+        }
+
+        // Global title
+        const faceList = Object.keys(faceBuckets).join(' + ');
         const byDia = {};
-        holes.forEach(h => { byDia[h.holeDia] = (byDia[h.holeDia] || 0) + 1; });
+        allHoles.forEach(h => { byDia[h.holeDia] = (byDia[h.holeDia] || 0) + 1; });
         const sizeStr = Object.entries(byDia).map(([d, c]) => `${d}mm x${c}`).join('  ');
         TEXT(COL_MARGIN, baseY + 12,
-            `CAGE ${cageRef}  —  ${faceName} FACE PLATE TEMPLATE  |  Rules: max ${maxLength}L x ${maxWidth}W mm  |  ${totalPlates} plates (${vsPlates.length} VS + ${hsPlates.length} HS)  |  ${plotHoles.length} holes`,
+            `CAGE ${cageRef}  —  ${faceList} FACE PLATE TEMPLATE  |  Rules: max ${maxLength}L x ${maxWidth}W mm  |  ${totalPlates} plates (${totalVS} VS + ${totalHS} HS)  |  ${allHoles.length} holes`,
             12, 'TEXT');
         TEXT(COL_MARGIN, baseY - 2,
             `25mm edge clearance  |  Hole dia = coupler OD + 2mm  |  Sizes: ${sizeStr}`,
