@@ -18,14 +18,19 @@ Zones are **infinite in IFC-X (length) and IFC-Z (height)** — bounded only in 
 
 ### Group 1 — Short bars at Y_rel = 423mm (77mm beyond F1A)
 
-| Layer | Count | Dir | Bar_Type |
-|---|---|---|---|
-| VS2 | 15 | X / diagonal | Strut Bar |
-| VS1 | 4 | X | Strut Bar |
-| HS4 | 5 | Z (vertical) | Strut Bar |
-| PRC | 1 | Z (vertical) | Preload Bar |
+| Layer | Count | Dir | Bar_Type | Correct type |
+|---|---|---|---|---|
+| VS2 | 15 | X / diagonal | Strut Bar | ✅ correct |
+| VS1 | 4 | X | Strut Bar | ✅ correct |
+| HS4 | 5 | Z (vertical) | Strut Bar | ✅ correct |
+| PRC | 1 | Z (vertical) | Preload Bar | ⚠️ should be Strut Bar (VS or HS) |
 
 These are short bars that sit entirely beyond the F1A outer face.
+The 1 PRC bar is mislabelled — any bar outside the mesh envelope with a coupler attached is a strut bar.
+
+**Implemented (cage-lab):** `_computeOutsidePreloadBars()` in `js/main.js` detects PRC/PRL bars
+whose Y extent is beyond `outerMaxY` or before `outerMinY`. Count surfaced in the warning banner:
+*"X preload bar(s) outside mesh envelope — should be Strut Bar (VS/HS)"*
 
 ### Group 2 — Through-bars (VS2, 9 bars)
 
