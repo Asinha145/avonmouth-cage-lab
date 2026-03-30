@@ -1462,10 +1462,25 @@ function _computePlates(plotHoles, maxLength, maxWidth) {
     const vsHoles = plotHoles.filter(h => /^VS/i.test(h.layer || ''));
     const hsHoles = plotHoles.filter(h => /^HS/i.test(h.layer || ''));
 
-    // VS: narrow in X (bandKey=px, maxWidth), long in Z (groupKey=pz, maxLength)
-    const vsPlates = bandAndGroup(vsHoles, 'px', 'pz').map((h, i) => toPlate(h, i, 'VS'));
-    // HS: narrow in Z (bandKey=pz, maxWidth), long in X (groupKey=px, maxLength)
-    const hsPlates = bandAndGroup(hsHoles, 'pz', 'px').map((h, i) => toPlate(h, i, 'HS'));
+    // Auto-detect long axis from hole distribution.
+    // Wall cage VS: spread across many Z positions (few X columns) → long = Z, narrow = X
+    // Roof cage VS: all holes at same Z, spread across X                → long = X, narrow = Z
+    function getOrientation(holes) {
+        if (!holes.length) return { bandKey: 'px', groupKey: 'pz' };
+        const xUniq = new Set(holes.map(h => Math.round(h.px))).size;
+        const zUniq = new Set(holes.map(h => Math.round(h.pz))).size;
+        // More unique Z positions → long axis is Z (wall/typical)
+        // More unique X positions → long axis is X (roof/flat cage)
+        return zUniq >= xUniq
+            ? { bandKey: 'px', groupKey: 'pz' }   // long=Z: band narrow X, group long Z
+            : { bandKey: 'pz', groupKey: 'px' };   // long=X: band narrow Z, group long X
+    }
+
+    const vsOri = getOrientation(vsHoles);
+    const hsOri = getOrientation(hsHoles);
+
+    const vsPlates = bandAndGroup(vsHoles, vsOri.bandKey, vsOri.groupKey).map((h, i) => toPlate(h, i, 'VS'));
+    const hsPlates = bandAndGroup(hsHoles, hsOri.bandKey, hsOri.groupKey).map((h, i) => toPlate(h, i, 'HS'));
 
     return { vsPlates, hsPlates };
 }
