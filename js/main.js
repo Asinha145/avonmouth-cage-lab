@@ -415,7 +415,8 @@ function _buildViewerCheckboxes() {
             ? 0
             : allData.filter(b => !b._prlPrcMismatch && (b.Avonmouth_Layer_Set || b.Bar_Type || 'Unknown') === key).length;
         const couplerCount = [..._couplerMap.values()].filter(c => (c.layer || 'Coupler Head') === key).length;
-        const count = rebarCount + couplerCount;
+        // VS/HS couplers are 1:1 with their strut bars — count the bar, not bar+coupler
+        const count = /^[VH]S/i.test(key) ? rebarCount : rebarCount + couplerCount;
         const label = document.createElement('label');
         label.className = 'viewer-cb-label';
         label.innerHTML = `
