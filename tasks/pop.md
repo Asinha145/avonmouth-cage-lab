@@ -55,6 +55,64 @@ const outside = minY < N1A_ABS_MIN || maxY > F1A_ABS_MAX;
 
 ---
 
+## Template Drawing — Coupler Geometry Findings
+
+### CPLR Bar Types on VS/HS Layers
+
+The cage-v2 parser reclassifies coupler extension bars to VS/HS layers. Two sub-types exist:
+
+| Name pattern | Runs in | Coupler face | Example Y span (1613) |
+|---|---|---|---|
+| `F1-CPLR-L` / `F2-CPLR-L` | IFC-X (along cage length) | F1A face | constant Y ≈ F1A face position |
+| `N1-CPLR-L` / `N2-CPLR-L` | IFC-Y (cage width) | N1A face | Start_Y = N1A, End_Y = far beyond F1A |
+
+### Face Filter — F1A Template Must Only Use F1/F2-CPLR Bars
+
+F1A face template holes must come from **F1-CPLR and F2-CPLR bars only**.
+N1/N2-CPLR bars are on the opposite face — including them doubles the hole count with wrong X positions.
+
+Filter: `bar.Name matches /^F[12]-CPLR/i`
+
+### Coupler Position Along Bar (End_Y not Start_Y)
+
+For N1-CPLR-L bars (running in IFC-Y):
+- `Start_Y` ≈ N1A face outer edge
+- `End_Y` ≈ far beyond F1A face
+- **IFCBEAM (physical coupler head) is placed near End_Y** — ~10mm inside the F1A outer face (cage 1613: F1A outer Y≈6,010,260.5, AG16 coupler Y=6,010,250.0 → 10.5mm inside)
+
+**Note:** The `connected_rebar` link on IFCBEAM (Bylor pset) points to the N1-CPLR-L bar by GlobalId, but the bar's IFC placement origin can be at a different X,Z (Tekla exports a batch-reference, not a co-located link). Do not use `connected_rebar` for X,Z hole position — read directly from IFCBEAM placement coordinates.
+
+For F1-CPLR-L bars (running in IFC-X):
+- Bar Y is constant at the F1A face position
+- **IFCBEAM X,Z matches bar Start_X, Start_Z exactly** — hole position from `startX`, `startZ` is correct
+
+### Hole Position — Use IFCBEAM X, Z Directly
+
+**Do NOT derive hole X,Z from bar `startX`/`startZ`** — the VS/HS parser returns the IFC placement origin which may be at either face or mid-bar. Use the IFCBEAM's own absolute placement coordinates:
+- Hole X = IFCBEAM placement X (absolute, then subtract cage origin)
+- Hole Z = IFCBEAM placement Z (absolute, then subtract cage origin)
+- Filter to F1A face: Y > midpoint of (min coupler Y, max coupler Y)
+
+For cage 1613: F1A couplers have Y ≈ 6,010,217–6,010,260.5; N1A couplers Y ≈ 6,009,939.5–6,009,982. Midpoint = 6,010,100mm.
+
+**Implemented (de-tool):** `parseIFCBeamHoles()` in `server/routes/projects.js` — builds placement lookup from IFC raw text, filters to F1A face, returns `{xMm, zMm, holeDia}`.
+
+### Hole Size — Use IFCBEAM HEIGHT/WIDTH + 2mm
+
+Do NOT use `bar.Size + 2mm` (rebar diameter). Use the **coupler body OD from IFCBEAM** + 2mm:
+
+| Coupler model | IFCBEAM HEIGHT/WIDTH (OD) | Hole dia |
+|---|---|---|
+| AG16  | 25mm | **27mm** |
+| AG20N | 31mm | **33mm** |
+| AG25  | 38mm | **40mm** |
+| AG32N | 47mm | **49mm** |
+
+Source: `HEIGHT` or `WIDTH` property on the IFCBEAM entity (Tekla Reinforcement pset).
+Chain: `IFCBEAM.connected_rebar` → CPLR bar → `source_global_id` → VS strut body.
+
+---
+
 ## Bars Fully Inside Void (expected, not outside)
 
 | eid | Layer | Y_rel | Dir | Note |
