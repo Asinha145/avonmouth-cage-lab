@@ -1401,7 +1401,7 @@ function _parseIFCBeamHoles(ifcText) {
     const yMid  = (Math.min(...yVals) + Math.max(...yVals)) / 2;
     return beams
         .filter(b => b.yMm > yMid && b.od !== null && /^[VH]S/i.test(b.layer || ''))
-        .map(b => ({ xMm: b.xMm, zMm: b.zMm, holeDia: b.od + 2, layer: b.layer }));
+        .map(b => ({ xMm: b.xMm, yMm: b.yMm, zMm: b.zMm, holeDia: b.od + 2, layer: b.layer }));
 }
 
 // Groups holes into rectangular plates.
@@ -1499,9 +1499,15 @@ function exportTemplateDXF(maxLength, maxWidth) {
         const allX = holes.map(h => h.xMm), allZ = holes.map(h => h.zMm);
         const minX = Math.min(...allX), minZ = Math.min(...allZ);
 
+        // Detect face plane: wall cage = X-Z (Z spans height), slab cage = X-Y (Z is constant)
+        // If Z range < 100mm, holes lie in the X-Y plane — use Y as the second plate axis.
+        const zSpan = Math.max(...allZ) - minZ;
+        const useY  = zSpan < 100;
+        const minP  = useY ? Math.min(...holes.map(h => h.yMm)) : minZ;
+
         // Normalise to local coords, sort left→right then bottom→top, assign global seq number
         const plotHoles = holes
-            .map(h => ({ ...h, px: +(h.xMm - minX).toFixed(1), pz: +(h.zMm - minZ).toFixed(1) }))
+            .map(h => ({ ...h, px: +(h.xMm - minX).toFixed(1), pz: +((useY ? h.yMm : h.zMm) - minP).toFixed(1) }))
             .sort((a, b) => a.px !== b.px ? a.px - b.px : a.pz - b.pz);
         plotHoles.forEach((h, i) => { h.num = i + 1; });
 
