@@ -1335,9 +1335,11 @@ function _parseIFCBeamHoles(ifcText) {
     const getEntity = id => { const m = ifcText.match(new RegExp(`#${id}=([^\n]+)`)); return m ? m[1] : null; };
     const parseCoords = s => [...s.matchAll(/[-+]?\d+\.?\d*(?:[Ee][+-]?\d+)?/g)].map(m => parseFloat(m[0]));
 
-    // Absolute placement lookup: lpId → [X, Y, Z]
+    // Placement lookup: lpId → [X, Y, Z]
+    // Tekla encodes global BNG coords directly in each element's own IFCAXIS2PLACEMENT3D
+    // regardless of whether the IFCLOCALPLACEMENT has a parent ref or $ (absolute).
     const absPos = {};
-    for (const m of ifcText.matchAll(/#(\d+)=IFCLOCALPLACEMENT\(\$,#(\d+)\)/g)) {
+    for (const m of ifcText.matchAll(/#(\d+)=IFCLOCALPLACEMENT\([^,)]*,#(\d+)\)/g)) {
         const [, lpId, axId] = m;
         const ax = getEntity(axId); if (!ax?.includes('IFCAXIS2PLACEMENT3D')) continue;
         const cpId = ax.match(/#(\d+)/)?.[1]; if (!cpId) continue;
