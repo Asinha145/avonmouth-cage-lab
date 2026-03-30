@@ -1487,27 +1487,32 @@ function _computePlates(plotHoles, maxLength, maxWidth) {
     return { vsPlates, hsPlates };
 }
 
-// Detect which mesh face layer the coupler holes belong to by Y-proximity.
-// Face layers: F*/N* (wall cages), T*/B* (slab cages).
+// Detect which mesh face layer the coupler holes belong to by proximity.
+// Detection axis is determined from layer naming — not from coupler geometry:
+//   F*/N* layers present → wall cage → faces separated in Y → compare Y
+//   T*/B* layers present → slab cage → faces separated in Z → compare Z
 // Returns e.g. 'F1A', 'T1A', or null if no face layers in allData.
 function _detectFaceName(holes) {
     const faceRe = /^[FNTB]\d/i;
-    const layerY = {};
+    const layerCoords = {};
     for (const bar of allData) {
         const layer = bar.Avonmouth_Layer_Set;
         if (!layer || !faceRe.test(layer)) continue;
         const y = bar.Start_Y ?? bar.End_Y;
-        if (y == null) continue;
-        if (!layerY[layer]) layerY[layer] = [];
-        layerY[layer].push(y);
+        const z = bar.Start_Z ?? bar.End_Z;
+        if (y == null && z == null) continue;
+        if (!layerCoords[layer]) layerCoords[layer] = [];
+        layerCoords[layer].push({ y, z });
     }
-    if (!Object.keys(layerY).length) return null;
-    const sorted = h => [...h].sort((a, b) => a - b);
-    const median = ys => sorted(ys)[Math.floor(ys.length / 2)];
-    const holeMedianY = median(holes.map(h => h.yMm));
+    if (!Object.keys(layerCoords).length) return null;
+    const median = arr => { const s = [...arr].filter(v => v != null).sort((a, b) => a - b); return s[Math.floor(s.length / 2)]; };
+    // Wall (F/N) → detect by Y; Slab (T/B) → detect by Z
+    const hasFN = Object.keys(layerCoords).some(l => /^[FN]\d/i.test(l));
+    const holeMedian = hasFN ? median(holes.map(h => h.yMm)) : median(holes.map(h => h.zMm));
     let bestLayer = null, bestDist = Infinity;
-    for (const [layer, ys] of Object.entries(layerY)) {
-        const dist = Math.abs(median(ys) - holeMedianY);
+    for (const [layer, pts] of Object.entries(layerCoords)) {
+        const vals = hasFN ? pts.map(p => p.y) : pts.map(p => p.z);
+        const dist = Math.abs(median(vals) - holeMedian);
         if (dist < bestDist) { bestDist = dist; bestLayer = layer; }
     }
     return bestLayer;
