@@ -62,6 +62,67 @@ examples/
 
 ---
 
+## Milestones
+
+### v1 — Core Analyser (13 Mar 2026)
+First working release. IFC text parser, 3D BREP viewer via web-ifc WASM, C01 acceptance check, weight table, CSV export. No shape-code geometry approximation — reads Tekla's own tessellated solids directly.
+
+### v2 — EDB + C01 Validation System (17 Mar 2026)
+Full Excel EDB template output (`.xlsm`). Wall thickness auto-fill from BREP. PRL/PRC mismatch detection — flags bars where the geometry label contradicts the layer label and highlights them in the 3D viewer. Step detection for vertical bars at the same plan position. Bracing bar lookup table. C01 report export. EDB gated behind C01 approval.
+
+### v3 — Multi-Vendor + Slab Cage Support (20–25 Mar 2026)
+Parser extended to handle ICOS and INGEROP IFC exports (spaced format, different pset naming). Slab/roof cage auto-detection (T1A/B1A layers). Slab EDB with T1/T2/B1/B2 bar-role dimension derivation. UDL and weight attribution using ATK pset `Weight` over geometry-estimated `Formula_Weight`. Three-bbox dimension architecture separating mesh, all-bars, and total envelopes.
+
+### v4 — IFCBEAM Coupler Head System (26–27 Mar 2026)
+Full support for IFCBEAM coupler head entities. Coupler heads identified by `Bylor.connected_rebar` and `Avonmouth.Layer/Set` pset — displayed in the 3D viewer under their correct layer, not as "Unknown". BREP bounding box used as authoritative cage height (correctly handles Shape Code 26 cranked bars where text-parser projection overestimates height). Three-zone spatial classifier replaces AABB check for PRL/PRC face assignment. Coupler head weight attribution via ATK pset.
+
+### v5 — Template DXF Fabrication Output (30 Mar 2026)
+Generates a dimensioned DXF plate template showing the exact hole positions for VS/HS strut coupler penetrations through the formwork face. Full auto-detection pipeline:
+- IFCBEAM positions parsed directly from raw IFC text (handles both absolute `$` and relative `#N` parent placements)
+- VS and HS plates generated separately with independent orientation detection
+- Plate long axis auto-detected from hole distribution (wall cage VS → Z axis; slab cage VS → X axis)
+- Face plane auto-detected (wall cage → X-Z; slab cage → X-Y using Y as second axis)
+- Face name (`F1A`, `T1A`, etc.) derived by Y/Z proximity of face layer bars to coupler holes — detection axis itself determined from layer naming (F/N → wall → compare Y; T/B → slab → compare Z)
+- Greedy band-and-group algorithm respects 2000mm max length and 300mm max width constraints with 25mm edge clearance
+- VS/HS layer counts shown as bar count only (coupler is part of the bar unit, not a separate item)
+
+---
+
+## Changelog
+
+### 30 Mar 2026
+- **Template DXF — face name auto-detection**: `_detectFaceName` uses Y/Z proximity of mesh face bars to coupler holes. Detection axis driven by layer naming (F/N → wall → Y; T/B → slab → Z). Verified against 1613, 1704, RF35.
+- **Template DXF — face plane fix**: Slab cage holes lie in X-Y plane (Z constant). `pz` now maps from IFC-Y not IFC-Z when Z span < 100mm. RF35 plates: 83mm wide → 200mm wide.
+- **Template DXF — orientation auto-detect**: `getOrientation()` counts unique X vs Z positions per hole group. Wall VS → long=Z; Slab VS → long=X. Fixes RF35 producing 30 single-hole plates instead of 3×20.
+- **IFCBEAM placement fix**: `_parseIFCBeamHoles` regex broadened from `\(\$,` to `\([^,)]*,` — handles both absolute (`$`) and relative (`#N`) IFCLOCALPLACEMENT first arguments. Fixes RF35 returning 0 holes.
+- **VS/HS count display**: Layer checkbox panel now shows bar count only for VS/HS layers (coupler is 1:1 with bar — not a separate unit). Was showing 120 for RF35 VS, now shows 60.
+- **Separate VS/HS plates**: VS and HS holes grouped and plated independently with correct long-axis orientation.
+- **Template DXF for all cage types**: Removed wall-only gate; template works for wall and slab cages.
+- **Coupler weight removed**: Coupler weight stripped from layer table, UDL, and EDB outputs — was double-counting (ATK pset weight already includes the coupler).
+- **JS syntax fix**: Duplicate `const pct` declaration after coupler weight removal caused silent SyntaxError killing all DOMContentLoaded listeners (file upload broken on GitHub Pages).
+
+### 27 Mar 2026
+- **Weight source fix**: `extractSlabData` switched to `b.Weight ?? b.Formula_Weight`. ATK pset weight is authoritative; geometry formula is fallback only. Eliminated ~96 kg discrepancy on cage 672.
+- **Cage-lab public repo initialised**: Stripped EDB templates; public lab split from private cage-v2.
+
+### 26 Mar 2026
+- **BREP height authoritative**: Mesh height display uses BREP bbox, not text-parser projection. For Shape Code 26 (cranked) bars the text parser overestimates height by the horizontal leg lengths.
+- **Three-zone PRL/PRC classifier**: Replaced AABB check with F1A / void / N1A zone classifier derived from actual mesh bar Y positions.
+- **Three-bbox dimension architecture**: `meshBbox`, `allBarBbox`, `totalBrepBbox` maintained separately. EDB width from all bars; EDB length/height from mesh bars; display height from unconditional BREP envelope.
+- **Coupler head layer association**: IFCBEAM entities now shown under their Avonmouth layer in viewer and weight table, not as "Unknown".
+
+### 17–25 Mar 2026
+- **Slab cage support**: Auto-detects T1A/B1A. Slab EDB derives H36/I36 from T2/B2 and T1/B1 bar lengths (not axis extents — avoids brittle orientation assumption).
+- **Spacing formula fix**: `span / (N-1)` not `span / N`. 24 bars over 4805mm: 200mm (wrong) → 210mm (correct).
+- **Multi-vendor parser**: ICOS and INGEROP IFC format support (spaced tokens, different pset naming).
+- **EDB system**: Full Excel output, wall thickness auto-fill, UDL, diameter summaries, C01 gate.
+- **Step detection, stagger clustering, PRL/PRC mismatch**.
+
+### 13 Mar 2026
+- Initial release: IFC parser, BREP 3D viewer, C01 check, weight table, CSV export.
+
+---
+
 ## Mistakes I made building this (so I remember)
 
 **S14 — Wrong bar direction column**
