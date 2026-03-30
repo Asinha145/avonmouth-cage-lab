@@ -209,3 +209,22 @@ function getOrientation(holes) {
 **Requires:** `yMm` must be passed through `_parseIFCBeamHoles` (add to `.map()` return object).
 
 ---
+
+## Face Name Detection — Use Layer Naming Not Coupler Z Span (March 2026)
+
+**Mistake:** Used `zSpan < 100mm` on coupler hole positions to decide whether to compare Y or Z when identifying the face layer. Cage 1704 is a wall cage (F1A/N1A) but all its VS couplers happen to sit at the same Z → zSpan=0 → wrongly classified as slab → Z-based detection → 3528mm dist → wrong answer.
+
+**Rule:** Determine detection axis from face layer naming, not coupler geometry:
+- F*/N* layers present → wall cage → faces separated in Y → compare Y
+- T*/B* layers present → slab cage → faces separated in Z → compare Z
+
+```javascript
+const hasFN = Object.keys(layerCoords).some(l => /^[FN]\d/i.test(l));
+const holeMedian = hasFN ? median(holes.map(h => h.yMm)) : median(holes.map(h => h.zMm));
+```
+
+**Verified:** 1613 → F1A (79mm), 1704 → F1A (0mm), RF35 → T1A (80mm).
+
+**Why:** Layer naming is the semantic ground truth. Coupler geometry is an accidental consequence of cage orientation — it can mislead.
+
+---
