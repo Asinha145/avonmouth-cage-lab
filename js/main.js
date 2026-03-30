@@ -235,6 +235,8 @@ function displayResults(parser) {
     // Compute PRL/PRC mismatches early so they can feed into rejection banner
     const prlPrcResult = _computePRLPRCMismatches();
     const preloadMisCount = prlPrcResult ? prlPrcResult.totalMis : 0;
+    const outsidePreload  = _computeMislabelledOutsideBars();
+    const outsidePreloadCount = outsidePreload ? outsidePreload.count : 0;
 
     // Rejection banner
     const banner   = document.getElementById('rejection-banner');
@@ -262,6 +264,8 @@ function displayResults(parser) {
         const warns = [];
         if (preloadMisCount > 0)
             warns.push(`${preloadMisCount} preload bar${preloadMisCount > 1 ? 's' : ''} with PRL/PRC label mismatch — review geometry`);
+        if (outsidePreloadCount > 0)
+            warns.push(`${outsidePreloadCount} preload bar${outsidePreloadCount > 1 ? 's' : ''} outside mesh envelope — should be Strut Bar (VS/HS)`);
         if (warns.length) {
             document.getElementById('warning-reasons').innerHTML = warns.map(r => `<li>${r}</li>`).join('');
             warnBanner.classList.remove('hidden');
@@ -1583,6 +1587,47 @@ function _computePRLPRCMismatches() {
     const total    = prlCorrect + prlMismatch + prcCorrect + prcMismatch;
     const totalMis = prlMismatch + prcMismatch;
     return { prlCorrect, prlMismatch, prcCorrect, prcMismatch, mismatches, total, totalMis, zones };
+}
+
+// ── Mislabelled bars outside mesh envelope ────────────────────────────
+//
+// Rule: any bar that sits outside the cage's mesh envelope (beyond the F1A
+// or N1A outer face) AND has a coupler head on its layer SHOULD be a strut
+// bar — i.e. its layer should start with VS or HS.
+//
+// Bars outside without coupler heads are not flagged (e.g. LK1 link bars
+// sitting proud of the cage are acceptable).  VS/HS bars outside with
+// couplers are correct strut bars — no warning.
+//
+// Detection uses min/max(Start_Y, End_Y) so through-bars whose End_Y is
+// driven beyond the face by a coupler entity are caught regardless of which
+// end the parser records as Start_Y.
+//
+// Returns { count, bars[] } or null if zones cannot be computed.
+function _computeMislabelledOutsideBars() {
+    const zones = _computeMeshFaceZones();
+    if (!zones) return null;
+
+    const outerMinY = Math.min(zones.f1a.minY, zones.n1a.minY);
+    const outerMaxY = Math.max(zones.f1a.maxY, zones.n1a.maxY);
+
+    // Layers that have at least one coupler head in the cage
+    const couplerLayers = new Set();
+    _couplerMap.forEach(c => { if (c.layer) couplerLayers.add(c.layer); });
+
+    const isVsHs = layer => /^[VH]S/i.test(layer || '');
+
+    const flagged = allData.filter(b => {
+        if (b.Start_Y == null) return false;
+        const lo = Math.min(b.Start_Y, b.End_Y ?? b.Start_Y);
+        const hi = Math.max(b.Start_Y, b.End_Y ?? b.Start_Y);
+        if (hi <= outerMaxY && lo >= outerMinY) return false;       // inside envelope
+        if (!couplerLayers.has(b.Avonmouth_Layer_Set)) return false; // no coupler on this layer
+        if (isVsHs(b.Avonmouth_Layer_Set)) return false;            // already a strut bar
+        return true;
+    });
+
+    return { count: flagged.length, bars: flagged };
 }
 
 function _renderPRLPRCResults(result) {
