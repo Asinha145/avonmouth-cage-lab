@@ -245,3 +245,18 @@ const holeMedian = hasFN ? median(holes.map(h => h.yMm)) : median(holes.map(h =>
 **Verified P7349:** Old tool: 44 HS holes (F1A face only). New tool: 162 holes across F1A, N3A, F3A, N5A — 4 separate template sections.
 
 ---
+
+## Face Bucketing — Separation Axis Must Follow cageAxisName (March 2026)
+
+**Mistake:** `_bucketHolesByFace` always used Y to separate F/N face layers. P7349 is a wall cage running in Y (length=10.267m in Y, thickness=1.357m in X). F1A and N1A bars are at different X values, same Y range — comparing Y medians bucketed all couplers to one face.
+
+**Confirmed by BREP:** HS1 coupler origins at X=1,980,640 (N1A side, 9mm from N1A bar at X=1,980,649) and X=1,979,360 (F1A side, 15mm from F1A bar at X=1,979,345). Free ends (origin + refDir × 110mm) at X=1,980,750 and X=1,979,250 give pop-outs of 81mm and 75mm from the respective face bar outer faces — confirmed against Navisworks measurement.
+
+**Rule:** Derive face separation axis from `cageAxisName`:
+- `cageAxisName = 'Y'` → wall runs in Y → faces separated in **X** → compare `xMm` / `Start_X`
+- `cageAxisName = 'X'` → wall runs in X → faces separated in **Y** → compare `yMm` / `Start_Y`
+- T/B slab layers → always **Z**
+
+**Also:** IFCBEAM placement origin = inner face of coupler (bar-connection end). Protruding free end = origin + refDir × coupler length. ATK Coordinate Point property = coupler midpoint = origin + refDir × length/2 (cross-check only).
+
+---
