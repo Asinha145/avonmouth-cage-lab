@@ -180,6 +180,7 @@ class IFCParser {
                 Full_Rebar_Mark      : null,  // e.g. "S/503"
                 Bar_Type          : null,
                 Bar_Shape         : null,
+                Bar_Shape_Code    : null,  // numeric BS 8666 code e.g. '00', '21'
                 Orientation       : null,
                 Calculated_Weight : null,
                 Start_X: null, Start_Y: null, Start_Z: null,
@@ -840,11 +841,63 @@ class IFCParser {
     }
 
     detectBarShapes(bars) {
+        // BS 8666:2020 Table 3 shape code descriptions
+        const BS8666_SHAPES = {
+            '00': 'Straight',
+            '01': 'Stock length (straight)',
+            '11': 'Standard bend — one end',
+            '12': 'Large radius bend',
+            '13': 'Single crank',
+            '14': 'Two parallel bends',
+            '15': 'Two parallel bends (simple)',
+            '21': 'U-bar',
+            '22': 'U-bar (closed end)',
+            '23': 'Z-bar (reverse crank)',
+            '24': 'Right-angle two bends',
+            '25': 'Offset U-bar',
+            '26': 'S-crank',
+            '27': 'S-crank (with deduction)',
+            '28': 'Double crank',
+            '29': 'Reverse U-bar / triple crank',
+            '31': 'Open rectangular link',
+            '32': 'Open rectangular link (variant)',
+            '33': 'Closed link (radius end)',
+            '34': 'Lapped rectangular link',
+            '35': 'Seismic rectangular link',
+            '36': 'Closed rectangular link',
+            '41': 'Four-bend frame',
+            '44': 'Four-bend frame (variant)',
+            '46': 'Four-bend bobbin',
+            '47': 'Closed square link',
+            '48': 'Closed square (variant)',
+            '51': 'Five-bend closed loop',
+            '52': 'Five-bend loop (variant)',
+            '56': 'Complex closed link',
+            '63': 'Double closed loop',
+            '64': 'Complex closed frame',
+            '67': 'Straight spacer',
+            '75': 'Circular spiral',
+            '77': 'Helix / coil',
+            '98': 'Isometric 3D bend',
+            '99': 'Custom shape',
+        };
+
         bars.forEach(bar => {
-            const n = (bar.Name || '').toUpperCase();
-            if      (n.includes('CPLR')) bar.Bar_Shape = 'Straight with Coupler';
-            else if (n.includes('LINK')) bar.Bar_Shape = 'L-Bar';
-            else                         bar.Bar_Shape = 'Straight';
+            const code = (bar.Shape_Code_Base || '').trim().toUpperCase();
+            if (code && BS8666_SHAPES[code]) {
+                bar.Bar_Shape = `${code} — ${BS8666_SHAPES[code]}`;
+                bar.Bar_Shape_Code = code;
+            } else if (code) {
+                bar.Bar_Shape = `${code}`;
+                bar.Bar_Shape_Code = code;
+            } else {
+                // No shape code — fall back to name heuristic
+                const n = (bar.Name || '').toUpperCase();
+                if      (n.includes('LINK')) bar.Bar_Shape = 'Link';
+                else if (n.includes('CPLR') || n.includes('COUPLER')) bar.Bar_Shape = 'Straight';
+                else                         bar.Bar_Shape = '—';
+                bar.Bar_Shape_Code = null;
+            }
         });
     }
 

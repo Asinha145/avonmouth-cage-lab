@@ -1,4 +1,4 @@
-# Bars Popping Outside Mesh Zones — 1704 (2HD70730AC2)
+# Bars Popping Outside Mesh Zones — 1704 (2HD70730AC2) ✅ CLOSED (31 Mar 2026)
 
 ## Context
 
@@ -128,11 +128,10 @@ The `_classifyPrlPrcBar()` function uses `Start_Y` only for wx bars, justified b
 
 ---
 
-## TODO — Coupler Head Fix
+## Resolution ✅
 
-The through-bars' extreme `End_Y` (~808mm) is almost certainly the IFC position of the coupler head attached to the F1A face. The bar body ends at the F1A face (~346mm) but the coupler entity drives `End_Y` to ~808mm.
+Both issues are resolved in `js/main.js`:
 
-When tackling the coupler issue:
-1. Identify which IFC entity (IFCBEAM or IFCREINFORCINGBAR property) drives `End_Y` to 808mm
-2. Determine whether `End_Y` should be clamped to the bar body length or read from a different pset
-3. Cross-check against BREP geometry — the BREP through-bar length vs the text parser length
+**Through-bars (9 VS2):** `_computeMislabelledOutsideBars()` uses `Math.min(b.Start_Y, b.End_Y)` / `Math.max(b.Start_Y, b.End_Y)` to test both endpoints against the mesh envelope — so bars with `Start_Y` inside but `End_Y` far beyond are correctly caught.
+
+**Mislabelled preload bar (1 PRC):** Same function flags non-VS/HS bars outside the envelope whose layer has coupler heads. Surfaced in the warning banner as *"X preload bar(s) outside mesh envelope — should be Strut Bar (VS/HS)"*.

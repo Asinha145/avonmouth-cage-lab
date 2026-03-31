@@ -59,7 +59,7 @@ Never assume cage-lab is up to date — always check the cage-v2 commit hash bef
 
 ## Active Workstreams
 
-### 1. Coupler Geometry Investigation (`tasks/pop.md`) — ⏸ PENDING
+### 1. Coupler Geometry Investigation (`tasks/pop.md`) — ✅ CLOSED (31 Mar 2026)
 
 **Problem:** 9 VS2 bars (Dir_Y=1.0) have `Start_Y` inside the N1A zone but `End_Y` at ~808mm
 (far beyond F1A at 346mm). The ~460mm overshoot is the IFCBEAM coupler head entity on the F1A
