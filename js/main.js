@@ -1630,6 +1630,28 @@ function _bucketHolesByFace(holes) {
     return Object.fromEntries(Object.entries(buckets).filter(([, h]) => h.length > 0));
 }
 
+// Computes a shared datum (px=0, pz=0) from F/N face bar centreline endpoints.
+// Both exportFaceViewDXF and exportTemplateDXF subtract this so their coordinate
+// systems are identical and the two DXFs overlay exactly in AutoCAD.
+// datumPx = min IFC-Y (or X) of all F/N face bars — left end of cage face.
+// datumPz = min IFC-Z of all F/N face bars — bottom of cage (construction joint level).
+function _cageDatum() {
+    const sepAxis = _detectFaceSepAxis();
+    // Use outermost face layers only (F1A + N1A for wall, T1A + B1A for slab).
+    // Inner mesh layers (F3A, N5A, etc.) can extend beyond the formwork face and
+    // would shift the datum incorrectly if included.
+    const faceBars = allData.filter(b => b.Avonmouth_Layer_Set && /^[FNTB]1A$/i.test(b.Avonmouth_Layer_Set));
+    if (!faceBars.length) return { datumPx: 0, datumPz: 0 };
+    const pxVals = faceBars.flatMap(b =>
+        sepAxis === 'x' ? [b.Start_Y, b.End_Y] : [b.Start_X, b.End_X]
+    ).filter(v => v != null);
+    const pzVals = faceBars.flatMap(b => [b.Start_Z, b.End_Z]).filter(v => v != null);
+    return {
+        datumPx: Math.min(...pxVals),
+        datumPz: Math.min(...pzVals),
+    };
+}
+
 function exportFaceViewDXF(faceLayerName) {
     if (!allData.length) { alert('No cage data loaded.'); return; }
 
@@ -1712,15 +1734,13 @@ function exportFaceViewDXF(faceLayerName) {
         console.log(`[FaceView] Centreline fallback — ${bars.length} bars for ${faceLayerName}`);
     }
 
-    // Normalise to origin
-    const allPx = projected.flatMap(p => [p.x1, p.x2]).filter(v => v != null);
+    // Shared datum: bottom-left of F/N face bars (same origin as exportTemplateDXF)
+    const { datumPx, datumPz } = _cageDatum();
     const allPz = projected.flatMap(p => [p.z1, p.z2]).filter(v => v != null);
-    const minPx = Math.min(...allPx);
-    const minPz = Math.min(...allPz);
-    const maxPz = Math.max(...allPz) - minPz;
+    const maxPz = Math.max(...allPz) - datumPz;
 
-    const px = v => (v ?? 0) - minPx;
-    const pz = v => (v ?? 0) - minPz;
+    const px = v => (v ?? 0) - datumPx;
+    const pz = v => (v ?? 0) - datumPz;
 
     // DXF build
     const dxf  = [];
@@ -1803,10 +1823,9 @@ async function exportTemplateDXF(maxLength, maxWidth) {
 
         // Bucket holes by face (F1A/N1A or T1A/B1A) using proximity to face layer bar positions
         const faceBuckets = _bucketHolesByFace(allHoles);
-        // Long-axis origin: shared across all face sections so plates align in the DXF.
-        // cageAxisName='Y' wall cage → px follows IFC-Y (cage length); else px follows IFC-X.
-        const globalMinX = Math.min(...allHoles.map(h => h.xMm));
-        const globalMinY = Math.min(...allHoles.map(h => h.yMm));
+        // Shared datum from face bar centreline endpoints — same origin as exportFaceViewDXF
+        // so both DXFs overlay exactly when placed in the same AutoCAD drawing.
+        const { datumPx: globalDatumPx, datumPz: globalDatumPz } = _cageDatum();
 
         updateProgress(70, 'Computing plates…');
         await yield_();
@@ -1902,7 +1921,6 @@ async function exportTemplateDXF(maxLength, maxWidth) {
             const faceZ = faceHoles.map(h => h.zMm);
             const zSpan = Math.max(...faceZ) - Math.min(...faceZ);
             const useY  = zSpan < 100;
-            const minP  = useY ? Math.min(...faceHoles.map(h => h.yMm)) : Math.min(...faceZ);
 
             // px follows cage length axis (perpendicular to face separation axis):
             //   faceSepAxis='x' → faces separated in X → length runs in Y → use yMm
@@ -1912,8 +1930,8 @@ async function exportTemplateDXF(maxLength, maxWidth) {
             console.log(`[DXF] face=${faceName} | sepAxis=${faceSepAxis} | zSpan=${zSpan.toFixed(0)}mm | useY=${useY} | useLongY=${useLongY} | holes=${faceHoles.length}`);
             const plotHoles = faceHoles
                 .map(h => ({ ...h,
-                    px: +(useLongY ? h.yMm - globalMinY : h.xMm - globalMinX).toFixed(1),
-                    pz: +((useY ? h.yMm : h.zMm) - minP).toFixed(1) }))
+                    px: +(useLongY ? h.yMm - globalDatumPx : h.xMm - globalDatumPx).toFixed(1),
+                    pz: +((useY ? h.yMm : h.zMm) - globalDatumPz).toFixed(1) }))
                 .sort((a, b) => a.px !== b.px ? a.px - b.px : a.pz - b.pz);
             plotHoles.forEach((h, i) => { h.num = i + 1; });
 
