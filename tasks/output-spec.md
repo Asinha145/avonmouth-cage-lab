@@ -97,9 +97,30 @@
 
 ---
 
-## 6. Active Lab Workstreams (outputs not yet finalised)
+## 6. Template DXF Output ✅ COMPLETE (31 Mar 2026)
 
-### 6.1 Coupler Geometry — Outside-Zone Detection
+See `docs/template-dxf.md` for full specification.
+
+| Field | Value |
+|---|---|
+| Format | AC1009 (AutoCAD R12), mm units |
+| Faces | One section per face: F1A, N1A (wall); T1A, B1A (slab) |
+| Hole size | Coupler OD (`ATK EMBEDMENTS HEIGHT`) + 2mm tolerance |
+| Plate constraint | Max 2000mm length × 300mm width |
+| Edge clearance | 25mm from nearest hole edge to plate edge |
+| VS plate orientation | Long = Z (height) for wall cages, auto-detect |
+| HS plate orientation | Long = px (cage length), hardcoded |
+| px axis | `yMm − globalMinY` when `faceSepAxis='x'` (wall faces in X); `xMm − globalMinX` otherwise |
+| pz axis | `zMm − minFaceZ` for wall; `yMm − minFaceY` for slab |
+| Face sep axis | From `_detectFaceSepAxis()` — geometry-based, not `cageAxisName` |
+
+**Verified output — P7349:** F1A=74 holes (25 VS + 49 HS, 8 plates), N1A=88 holes (5 HS plates, ~20 holes = 10+10 parallel rows, ~1850×217mm).
+
+---
+
+## 7. Active Lab Workstreams (outputs not yet finalised)
+
+### 7.1 Coupler Geometry — Outside-Zone Detection
 **Target output:** Correct `outside` flag on each bar using both endpoints.
 ```javascript
 // To implement in zone classification
@@ -110,7 +131,7 @@ const outside = minY < N1A_ABS_MIN || maxY > F1A_ABS_MAX;
 **Affected output:** Zone report, bar outside-zone count (currently 25 detected, 34 actual).
 **Do not merge back to cage-v2 until the 9 through-bars are correctly classified.**
 
-### 6.2 EDB Template Making
+### 7.2 EDB Template Making
 **Target:** New or revised EDB template file(s) in `templates/` (local only — gitignored).
 Any JS-side changes that support the new template → must be spec'd here before implementation.
 Template structure changes must not alter existing cell references for H36–Z36 without a spec update.

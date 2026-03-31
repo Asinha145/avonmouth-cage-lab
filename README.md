@@ -86,9 +86,27 @@ Generates a dimensioned DXF plate template showing the exact hole positions for 
 - Greedy band-and-group algorithm respects 2000mm max length and 300mm max width constraints with 25mm edge clearance
 - VS/HS layer counts shown as bar count only (coupler is part of the bar unit, not a separate item)
 
+### v6 — Template DXF Geometry-Based Axis Detection + Performance (31 Mar 2026)
+Critical fixes verified against P7349 (10,267mm Y-running wall cage, 162 VS/HS coupler holes):
+- **`_detectFaceSepAxis()`** — replaces `cageAxisName`-dependent bucketing with geometry-based detection. Compares max within-layer spread on X vs Y: face bars cluster tightly on the separation axis (F1A all bars at X±50mm) and spread the full wall length on the other (Y±10,267mm). `cageAxisName` is unreliable for this — P7349 returns `'Z'` from the parser, not `'Y'`.
+- **`px` axis fix** — `useLongY` now driven by `faceSepAxis === 'x'` not `cageAxisName === 'Y'`. For P7349 this means `px = yMm` (cage length direction), not `xMm` (wall thickness, only 2 values).
+- **HS plate orientation hardcoded** — `hsOri = { bandKey:'pz', groupKey:'px' }`. HS struts are always horizontal along cage length; auto-detect was unreliable when px was broken.
+- **entityMap performance** — `_parseIFCBeamHoles` now builds a single O(n) `Map` at function entry instead of calling `new RegExp` per entity lookup (was scanning 5.5MB × thousands of calls, causing "page not responding" on P7349).
+- **Progress bar** — async `exportTemplateDXF` with `showProgress` / `updateProgress` so the UI stays responsive on large files.
+- **Verified P7349 output**: F1A = 74 holes (25 VS + 49 HS), N1A = 88 holes (all HS) in 5 plates of ~20 holes each (10+10 parallel rows, ~1850×217mm).
+
 ---
 
 ## Changelog
+
+### 31 Mar 2026
+- **`_detectFaceSepAxis()`**: New geometry-based function replaces `cageAxisName`-dependent face bucketing. Compares max within-layer spread on X vs Y — the separation axis is the one where face bars are tightly clustered (e.g. F1A X±50mm vs Y±10,267mm). Fixes critical bucketing bug for P7349 where `cageAxisName='Z'` (not 'Y') caused all 142 HS holes to land in inner layer F3A.
+- **`px` axis fix for geometry-based useLongY**: `useLongY = faceSepAxis === 'x' && !useY`. Was `cageAxisName === 'Y'` which never fired for P7349. Ensures px maps to cage length direction (Y for P7349) not wall thickness (X, only 2 values).
+- **HS orientation hardcoded**: `hsOri = { bandKey:'pz', groupKey:'px' }`. HS struts always run along cage length; auto-detect was unreliable when px was broken.
+- **entityMap O(1) performance fix**: `_parseIFCBeamHoles` now builds `Map` in one `matchAll` pass at entry. Was calling `new RegExp` per lookup — effectively full-file scan per entity. With thousands of IFCBEAM pset chain lookups on P7349 (5.5MB), this caused "page not responding".
+- **Progress bar**: `exportTemplateDXF` is now async with `showProgress`/`updateProgress` calls and `yield_` between stages. Page stays responsive on large files.
+- **Local DXF diagnostic**: `diag-template-dxf.mjs` — Node.js script that generates the template DXF locally from a sample IFC and prints plate summary. Used to verify P7349 output without browser.
+- **Verified P7349**: F1A=74 holes (25 VS + 49 HS), N1A=88 holes (all HS, 5 plates of ~20 holes = 10+10 parallel rows at 135mm Z spacing, ~1850×217mm each).
 
 ### 30 Mar 2026
 - **Template DXF — face name auto-detection**: `_detectFaceName` uses Y/Z proximity of mesh face bars to coupler holes. Detection axis driven by layer naming (F/N → wall → Y; T/B → slab → Z). Verified against 1613, 1704, RF35.

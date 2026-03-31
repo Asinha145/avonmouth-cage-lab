@@ -240,16 +240,23 @@ const sample = getEntity(somePropId);
 console.log(sample);  // inspect raw text
 ```
 
-### Step 5 — Check the Y midpoint filter
+### Step 5 — Check face bucketing
 
-The face filter splits F1A vs N1A couplers by Y midpoint:
+`_parseIFCBeamHoles` returns all VS/HS holes without face filtering. Face assignment is done by `_bucketHolesByFace` using `_detectFaceSepAxis`.
+
+If holes come back but land on the wrong face or are all lumped together, check:
 ```javascript
-const yVals = beams.map(b => b.yMm);
-const yMid = (Math.min(...yVals) + Math.max(...yVals)) / 2;
-// If all beams have the same Y → yMid = that Y → filter drops all
+// What is _detectFaceSepAxis() returning for this cage?
+// Is xMaxRange or yMaxRange unexpectedly small/large?
+const layers = Object.values(layerCoords);
+console.log('xMaxRange', Math.max(...layers.map(pts => {
+    const v = pts.map(p => p.x).filter(v => v != null).sort((a,b)=>a-b);
+    return v.length >= 2 ? v[v.length-1] - v[0] : 0;
+})));
+// If both x and y ranges are similar → face layers may overlap → investigate cage geometry
 ```
 
-If the cage has couplers on only one face, or all at the same Y, this filter may incorrectly drop everything.
+The old Y-midpoint filter (`yMid` split) was removed — it only worked for simple 2-face cages and misassigned holes on multi-layer cages like P7349.
 
 ---
 

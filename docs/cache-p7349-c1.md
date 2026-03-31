@@ -243,5 +243,5 @@ Run any with: `node <script>.mjs`
 ## Open Questions / Next Steps
 
 - [ ] Shape code suffix → coupler count rule only verified for 29 explicit bars. Bulk of P7349 bars have no explicit shape code pset — coupler count read from Bylor linkage (1/2/3 beams per rebar). Tool handles this correctly implicitly.
-- [ ] Template DXF for P7349 now produces 4 face sections. Has not been visually verified against a fabrication drawing.
-- [ ] `cageAxisName = 'Z'` edge case (vertical cage) in `_bucketHolesByFace` falls through to `sepAxis = 'y'` — may need review if a vertical cage with F/N layers is encountered.
+- [x] Template DXF for P7349 verified (31 Mar 2026). F1A=74 holes (25 VS + 49 HS), N1A=88 holes (all HS, 5 plates ×~20 holes). `diag-template-dxf.mjs` produces `P7349_C1-template-diag.dxf`. Not yet compared to fabrication drawing.
+- [x] `cageAxisName='Z'` edge case resolved: `_bucketHolesByFace` now uses `_detectFaceSepAxis()` (geometry-based within-layer spread), no dependence on `cageAxisName`. P7349 correctly returns `sepAxis='x'`.
