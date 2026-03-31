@@ -1596,6 +1596,7 @@ async function exportTemplateDXF(maxLength, maxWidth) {
         const allHoles = _parseIFCBeamHoles(_rawIfcText);
         if (!allHoles.length) throw new Error('No VS/HS strut coupler holes found in this IFC.');
 
+        console.log(`[DXF] cageAxisName=${cageAxisName} | holes=${allHoles.length}`);
         updateProgress(55, `Found ${allHoles.length} VS/HS holes — bucketing by face…`);
         await yield_();
 
@@ -1702,6 +1703,7 @@ async function exportTemplateDXF(maxLength, maxWidth) {
             //   cageAxisName='Y' wall cage → holes vary in IFC-Y → use yMm
             //   slab (useY=true) or cageAxisName='X'/'Z' → use xMm
             const useLongY = cageAxisName === 'Y' && !useY;
+            console.log(`[DXF] face=${faceName} | zSpan=${zSpan.toFixed(0)}mm | useY=${useY} | useLongY=${useLongY} | holes=${faceHoles.length}`);
             const plotHoles = faceHoles
                 .map(h => ({ ...h,
                     px: +(useLongY ? h.yMm - globalMinY : h.xMm - globalMinX).toFixed(1),
