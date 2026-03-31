@@ -1516,40 +1516,58 @@ function _detectFaceName(holes) {
     return bestLayer;
 }
 
-// Assigns every hole to its nearest mesh face layer (F1A/N1A or T1A/B1A) by Y or Z proximity.
+// Assigns every hole to its nearest mesh face layer (F1A/N1A or T1A/B1A) by proximity.
+// Face separation axis is derived from cageAxisName:
+//   cageAxisName='Y' → wall runs in Y → faces separated in X → compare xMm / Start_X
+//   cageAxisName='X' → wall runs in X → faces separated in Y → compare yMm / Start_Y
+//   T/B slab layers  → always Z
 // Returns { 'F1A': [...], 'N1A': [...] } — only populated faces included.
-// Fallback when allData has no face layers: split by yMid of the hole set itself.
+// Fallback when allData has no face layers: split by hole midpoint on the separation axis.
 function _bucketHolesByFace(holes) {
     const faceRe = /^[FNTB]\d/i;
     const layerCoords = {};
     for (const bar of allData) {
         const layer = bar.Avonmouth_Layer_Set;
         if (!layer || !faceRe.test(layer)) continue;
+        const x = bar.Start_X ?? bar.End_X;
         const y = bar.Start_Y ?? bar.End_Y;
         const z = bar.Start_Z ?? bar.End_Z;
-        if (y == null && z == null) continue;
+        if (x == null && y == null && z == null) continue;
         if (!layerCoords[layer]) layerCoords[layer] = [];
-        layerCoords[layer].push({ y, z });
+        layerCoords[layer].push({ x, y, z });
     }
+
+    // Determine separation axis: slab (T/B) → Z; wall running in Y → X; else → Y
+    const hasFN = Object.keys(layerCoords).some(l => /^[FN]\d/i.test(l));
+    const hasTB = Object.keys(layerCoords).some(l => /^[TB]\d/i.test(l));
+    let sepAxis; // 'x' | 'y' | 'z'
+    if (hasTB && !hasFN)      sepAxis = 'z';
+    else if (cageAxisName === 'Y') sepAxis = 'x';
+    else                      sepAxis = 'y';
+
+    const holeVal  = h => sepAxis === 'x' ? h.xMm  : sepAxis === 'z' ? h.zMm  : h.yMm;
+    const barVal   = p => sepAxis === 'x' ? p.x     : sepAxis === 'z' ? p.z    : p.y;
+
     if (!Object.keys(layerCoords).length) {
-        // Fallback: split by hole yMid
-        const yVals = holes.map(h => h.yMm);
-        const yMid = (Math.min(...yVals) + Math.max(...yVals)) / 2;
+        // Fallback: split by hole midpoint on separation axis
+        const vals = holes.map(holeVal);
+        const mid = (Math.min(...vals) + Math.max(...vals)) / 2;
         const result = {};
-        const above = holes.filter(h => h.yMm > yMid);
-        const below = holes.filter(h => h.yMm <= yMid);
+        const above = holes.filter(h => holeVal(h) > mid);
+        const below = holes.filter(h => holeVal(h) <= mid);
         if (above.length) result['F1A'] = above;
         if (below.length) result['N1A'] = below;
         return Object.keys(result).length ? result : { 'FACE': holes };
     }
+
     const median = arr => { const s = [...arr].filter(v => v != null).sort((a, b) => a - b); return s[Math.floor(s.length / 2)]; };
-    const hasFN = Object.keys(layerCoords).some(l => /^[FN]\d/i.test(l));
     const faceMedians = {};
     for (const [layer, pts] of Object.entries(layerCoords))
-        faceMedians[layer] = hasFN ? median(pts.map(p => p.y)) : median(pts.map(p => p.z));
+        faceMedians[layer] = median(pts.map(barVal));
+
     const buckets = {};
     for (const hole of holes) {
-        const val = hasFN ? hole.yMm : hole.zMm;
+        const val = holeVal(hole);
         let best = null, bestDist = Infinity;
         for (const [layer, med] of Object.entries(faceMedians)) {
             const d = Math.abs(med - val); if (d < bestDist) { bestDist = d; best = layer; }
