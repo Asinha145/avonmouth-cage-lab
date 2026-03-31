@@ -1634,35 +1634,30 @@ function exportFaceViewDXF(faceLayerName) {
         if (!faceLayerName) { alert('No face layers detected in this cage.'); return; }
     }
 
+    // Only the selected face layer — orthographic view from outside, no other layers
+    const bars = allData.filter(b => b.Avonmouth_Layer_Set === faceLayerName && b.Start_X != null);
+    if (!bars.length) { alert(`No bars found for layer ${faceLayerName}.`); return; }
+
     const sepAxis = _detectFaceSepAxis();
 
-    // Filter bars
-    const vertBars  = allData.filter(b => b.Avonmouth_Layer_Set === faceLayerName && b.Start_X != null);
-    const horizBars = allData.filter(b => /^HS/i.test(b.Avonmouth_Layer_Set || '') && b.Start_X != null);
-
-    if (!vertBars.length && !horizBars.length) {
-        alert(`No bars found for face ${faceLayerName} or HS layers.`); return;
-    }
-
-    // Project bar endpoints to 2D based on face-separation axis
+    // Project to 2D by dropping the face-normal axis
     const project = bar => {
         if (sepAxis === 'x') return { x1: bar.Start_Y, z1: bar.Start_Z, x2: bar.End_Y, z2: bar.End_Z };
         if (sepAxis === 'y') return { x1: bar.Start_X, z1: bar.Start_Z, x2: bar.End_X, z2: bar.End_Z };
         /* z */              return { x1: bar.Start_X, z1: bar.Start_Y, x2: bar.End_X, z2: bar.End_Y };
     };
 
-    const allBars = [...vertBars, ...horizBars];
-    const projected = allBars.map(project);
+    const projected = bars.map(project);
 
     // Normalise to origin
-    const minPx = Math.min(...projected.flatMap(p => [p.x1, p.x2]).filter(v => v != null));
-    const minPz = Math.min(...projected.flatMap(p => [p.z1, p.z2]).filter(v => v != null));
+    const allPx = projected.flatMap(p => [p.x1, p.x2]).filter(v => v != null);
+    const allPz = projected.flatMap(p => [p.z1, p.z2]).filter(v => v != null);
+    const minPx = Math.min(...allPx);
+    const minPz = Math.min(...allPz);
+    const maxPz = Math.max(...allPz) - minPz;
 
     const px = v => (v ?? 0) - minPx;
     const pz = v => (v ?? 0) - minPz;
-
-    const maxPx = Math.max(...projected.flatMap(p => [p.x1, p.x2]).filter(v => v != null)) - minPx;
-    const maxPz = Math.max(...projected.flatMap(p => [p.z1, p.z2]).filter(v => v != null)) - minPz;
 
     // DXF build
     const dxf  = [];
@@ -1680,46 +1675,30 @@ function exportFaceViewDXF(faceLayerName) {
     const fname   = fileEl?.files[0]?.name || 'CAGE';
     const cageRef = fname.replace(/\.[^.]+$/, '');
 
-    // HEADER
     emit('0','SECTION','2','HEADER',
          '9','$ACADVER','1','AC1009',
          '9','$INSUNITS','70','4',
          '0','ENDSEC');
 
-    // TABLES — two named layers
     emit('0','SECTION','2','TABLES',
-         '0','TABLE','2','LAYER','70','3',
-         '0','LAYER','2','VERT', '70','0','62','2',   // yellow — vertical face bars
-         '0','LAYER','2','HORIZ','70','0','62','5',   // blue   — horizontal HS bars
-         '0','LAYER','2','TEXT', '70','0','62','7',   // white  — labels
+         '0','TABLE','2','LAYER','70','2',
+         '0','LAYER','2','BARS','70','0','62','2',   // yellow — face bars
+         '0','LAYER','2','TEXT','70','0','62','7',   // white  — label
          '0','ENDTAB',
          '0','ENDSEC');
 
-    // ENTITIES
     emit('0','SECTION','2','ENTITIES');
 
-    // Vertical face bars — drawn first (behind in layered view)
-    for (let i = 0; i < vertBars.length; i++) {
-        const p = projected[i];
+    for (const p of projected) {
         if (p.x1 == null || p.z1 == null) continue;
-        LINE(px(p.x1), pz(p.z1), px(p.x2), pz(p.z2), 'VERT');
+        LINE(px(p.x1), pz(p.z1), px(p.x2), pz(p.z2), 'BARS');
     }
 
-    // Horizontal HS bars — drawn second (in front in layered view)
-    for (let i = 0; i < horizBars.length; i++) {
-        const p = projected[vertBars.length + i];
-        if (p.x1 == null || p.z1 == null) continue;
-        LINE(px(p.x1), pz(p.z1), px(p.x2), pz(p.z2), 'HORIZ');
-    }
-
-    // Title label
     TEXT(0, maxPz + 40,
-        `${cageRef}  |  ${faceLayerName}  |  ${vertBars.length} vert bars  /  ${horizBars.length} HS bars`,
-        18, 'TEXT');
+        `${cageRef}  |  ${faceLayerName}  |  ${bars.length} bars`, 18, 'TEXT');
 
     emit('0','ENDSEC','0','EOF');
 
-    // Download
     const blob = new Blob([dxf.join('\n')], { type: 'application/octet-stream' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
