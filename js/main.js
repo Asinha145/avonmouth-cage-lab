@@ -187,6 +187,9 @@ async function processFile() {
                     const dims = await window._viewer3d.loadIFC(arrayBuffer, barMap, cageAxisName, _couplerMap);
                     if (dims) _updateDimBoxesFromBREP(dims);
                     _buildViewerCheckboxes();
+                    // Enable face view DXF button now that BREP geometry is loaded
+                    const faceBtn = document.getElementById('export-face-dxf-btn');
+                    if (faceBtn) { faceBtn.disabled = false; faceBtn.title = ''; }
                 } catch (e) {
                     console.warn('[main] BREP load error:', e);
                 }
@@ -334,6 +337,9 @@ function displayResults(parser) {
     if (fvSelect && faceLayers.length) {
         fvSelect.innerHTML = faceLayers.map(l => `<option value="${l}">${l}</option>`).join('');
         if (fvSection) fvSection.classList.remove('hidden');
+        // Keep button disabled until BREP finishes loading
+        const faceBtn = document.getElementById('export-face-dxf-btn');
+        if (faceBtn) { faceBtn.disabled = true; faceBtn.title = 'Waiting for 3D geometry to load…'; }
     }
 
     autoFillEDBInputs();
