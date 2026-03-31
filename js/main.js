@@ -1334,7 +1334,11 @@ async function exportCageReport() {
 // Hole size = coupler body OD + 2mm tolerance.
 
 function _parseIFCBeamHoles(ifcText) {
-    const getEntity = id => { const m = ifcText.match(new RegExp(`#${id}=([^\n]+)`)); return m ? m[1] : null; };
+    // Build entity index in one pass — O(n) once, then O(1) per lookup.
+    // Previously used new RegExp per call which scanned the full file each time (~5MB × thousands of calls).
+    const entityMap = new Map();
+    for (const m of ifcText.matchAll(/^#(\d+)=(.+)/gm)) entityMap.set(m[1], m[2]);
+    const getEntity = id => entityMap.get(String(id)) ?? null;
     const parseCoords = s => [...s.matchAll(/[-+]?\d+\.?\d*(?:[Ee][+-]?\d+)?/g)].map(m => parseFloat(m[0]));
 
     // Placement lookup: lpId → [X, Y, Z]
