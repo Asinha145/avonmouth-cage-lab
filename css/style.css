@@ -296,6 +296,20 @@ footer a:hover{opacity:.8;}
     cursor: default;
 }
 
+/* ── COUPLER WEIGHT ANNOTATION ──────────────────────────────────────── */
+.coupler-weight {
+    display: inline-block;
+    margin-left: 5px;
+    font-size: .72rem;
+    color: #805ad5;
+    font-style: italic;
+}
+.coupler-note {
+    font-size: .78rem;
+    color: #805ad5;
+    font-style: italic;
+}
+
 /* ── TABLE SEARCH CONTROLS ──────────────────────────────────────────── */
 .search-wrap {
     position: relative;

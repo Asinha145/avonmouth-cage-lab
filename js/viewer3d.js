@@ -219,7 +219,7 @@ class Viewer3D {
             const groupKey = (bar && bar._prlPrcMismatch) ? 'PRL/PRC Mismatch'
                 : bar     ? (bar.Avonmouth_Layer_Set || bar.Bar_Type || 'Unknown')
                 : coupler ? (coupler.layer || 'Coupler Head')
-                : 'Coupler Head';
+                : 'Unknown'; // entity in neither barMap nor couplerMap — flag for investigation
             if (!this.layerGroups.has(groupKey)) {
                 const g = new THREE.Group();
                 g.name = groupKey;

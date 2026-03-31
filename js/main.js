@@ -9,7 +9,7 @@
  * What stays the same:
  *   - ifc-parser.js for ALL metadata, classification, validation, stats
  *   - C01 rejection logic
- *   - Stagger clustering (Z_BAND = 100mm gap threshold within clustering)
+ *   - Stagger clustering (DZ_MAX = 100mm merge threshold; Z_BAND = 500mm height-zone grouping)
  *   - Step detection (mesh bars only, 50mm XY grid, 15–300mm range)
  *   - Weight: ATK/ICOS Rebar 'Weight' pset only — never formula for cage totals
  *   - UDL: formula weight (π×r²×L×7777) — geometry-based, pset-independent
@@ -295,8 +295,15 @@ function displayResults(parser) {
     const nonMeshBars = allData.filter(b => b.Bar_Type !== 'Mesh' && b.Bar_Type !== 'Unknown');
     const w     = b => b.Weight || 0;
     const fw    = b => b.Formula_Weight || 0;
-    const meshFW    = meshBars.reduce((s, b) => s + fw(b), 0);
-    const nonMeshFW = nonMeshBars.reduce((s, b) => s + fw(b), 0);
+    // Coupler weights: mesh if layer is a face layer (F1A, N1A, T1A, B1A), else non-mesh
+    const _MESH_LAYER_RE = /^[FNBTfnbt]\d+A$/i;
+    let _cplMeshFW = 0, _cplNonMeshFW = 0;
+    _couplerMap.forEach(c => {
+        const cw = c.weight ?? 0;
+        if (_MESH_LAYER_RE.test(c.layer || '')) _cplMeshFW += cw; else _cplNonMeshFW += cw;
+    });
+    const meshFW    = meshBars.reduce((s, b) => s + fw(b), 0) + _cplMeshFW;
+    const nonMeshFW = nonMeshBars.reduce((s, b) => s + fw(b), 0) + _cplNonMeshFW;
     const udl = meshFW > 0 ? nonMeshFW / meshFW : 0;
 
     const guidCounts = new Map();
@@ -665,10 +672,24 @@ function displayLayerWeightStats() {
         layerMap[layer].weight += bar.Weight || 0;
     });
 
+    // Accumulate coupler head weights per layer (spec §1.2 — combined = bar + coupler weight)
+    const couplerByLayer = {};
+    let totalCouplerWeight = 0;
+    _couplerMap.forEach(c => {
+        const cw = c.weight ?? 0;
+        if (!cw) return;
+        const layer = c.layer || 'Coupler Head';
+        couplerByLayer[layer] = (couplerByLayer[layer] || 0) + cw;
+        totalCouplerWeight += cw;
+    });
+
     const rows        = Object.entries(layerMap).sort((a, b) => a[0].localeCompare(b[0]));
     const totalWeight = rows.reduce((s, [, v]) => s + v.weight, 0);
     rows.forEach(([layer, data]) => {
-        const pct        = totalWeight > 0 ? (data.weight / totalWeight * 100) : 0;
+        const combined   = data.weight + (couplerByLayer[layer] || 0);
+        const pct        = (totalWeight + totalCouplerWeight) > 0 ? (combined / (totalWeight + totalCouplerWeight) * 100) : 0;
+        const cplKg      = couplerByLayer[layer];
+        const cplStr     = cplKg ? ` <span class="coupler-weight" title="Coupler head weight">+${cplKg.toFixed(2)} cpls</span>` : '';
         const isUnknown  = layer === 'Unknown';
         const isInferred = !!data.inferred;
         const tr         = document.createElement('tr');
@@ -681,7 +702,7 @@ function displayLayerWeightStats() {
             <td><strong>${isInferred ? displayLayer : layer}</strong>${isUnknown ? ' ⚠' : ''}</td>
             <td><span class="bar-type-badge ${(data.type || '').toLowerCase().replace(/\s+/g, '-')}">${data.type}</span></td>
             <td>${data.count.toLocaleString()}</td>
-            <td>${data.weight.toFixed(1)}</td>
+            <td>${combined.toFixed(1)}${cplStr}</td>
             <td>
                 <div class="weight-bar-wrap">
                     <div class="weight-bar-fill" style="width:${pct.toFixed(1)}%"></div>
@@ -690,12 +711,14 @@ function displayLayerWeightStats() {
             </td>`;
         container.appendChild(tr);
     });
+    const grandTotal  = totalWeight + totalCouplerWeight;
+    const cplNote     = totalCouplerWeight > 0 ? ` <span class="coupler-note">(incl. ${totalCouplerWeight.toFixed(1)} kg couplers)</span>` : '';
     const totalRow = document.createElement('tr');
     totalRow.className = 'total-row';
     totalRow.innerHTML = `
         <td colspan="2"><strong>TOTAL</strong></td>
         <td><strong>${allData.length.toLocaleString()}</strong></td>
-        <td><strong>${totalWeight.toFixed(1)}</strong></td>
+        <td><strong>${grandTotal.toFixed(1)}</strong>${cplNote}</td>
         <td></td>`;
     container.appendChild(totalRow);
 }
@@ -1032,11 +1055,17 @@ async function exportEDB(type) {
     const wallM  = parseFloat(document.getElementById('edb-wall-thickness').value);
     if (isNaN(wallM) || wallM <= 0) { alert('Wall thickness missing — analyse a cage first.'); return; }
 
-    // UDL: round UP to 2 decimal places
+    // UDL: round UP to 2 decimal places — includes coupler head weights per spec §1.3
+    const _EDB_MESH_RE = /^[FNBTfnbt]\d+A$/i;
     const meshBars     = allData.filter(b => b.Bar_Type === 'Mesh');
     const nonMeshBars  = allData.filter(b => b.Bar_Type !== 'Mesh' && b.Bar_Type !== 'Unknown');
-    const meshW        = meshBars.reduce((s, b) => s + (b.Weight || 0), 0);
-    const nonMeshW     = nonMeshBars.reduce((s, b) => s + (b.Weight || 0), 0);
+    let _edbCplMeshW = 0, _edbCplNonMeshW = 0;
+    _couplerMap.forEach(c => {
+        const cw = c.weight ?? 0;
+        if (_EDB_MESH_RE.test(c.layer || '')) _edbCplMeshW += cw; else _edbCplNonMeshW += cw;
+    });
+    const meshW        = meshBars.reduce((s, b) => s + (b.Weight || 0), 0) + _edbCplMeshW;
+    const nonMeshW     = nonMeshBars.reduce((s, b) => s + (b.Weight || 0), 0) + _edbCplNonMeshW;
     const udl          = meshW > 0 ? Math.ceil((nonMeshW / meshW) * 100) / 100 : 0;
 
     const layerStats = computeLayerStatsForEDB();
@@ -1510,8 +1539,10 @@ function _computePlates(plotHoles, maxLength, maxWidth) {
     // Roof cage VS: all holes at same Z, spread across X                → long = X, narrow = Z
     function getOrientation(holes) {
         if (!holes.length) return { bandKey: 'px', groupKey: 'pz' };
-        const xUniq = new Set(holes.map(h => Math.round(h.px))).size;
-        const zUniq = new Set(holes.map(h => Math.round(h.pz))).size;
+        // 15mm tolerance bucket: handles slight slab inclination / survey tolerances
+        // where Z values cluster near-zero but aren't exactly equal (Math.round alone fails).
+        const xUniq = new Set(holes.map(h => Math.round(h.px / 15))).size;
+        const zUniq = new Set(holes.map(h => Math.round(h.pz / 15))).size;
         // More unique Z positions → long axis is Z (wall/typical)
         // More unique X positions → long axis is X (roof/flat cage)
         return zUniq >= xUniq
@@ -1526,37 +1557,6 @@ function _computePlates(plotHoles, maxLength, maxWidth) {
     const hsPlates = bandAndGroup(hsHoles, hsOri.bandKey, hsOri.groupKey).map((h, i) => toPlate(h, i, 'HS'));
 
     return { vsPlates, hsPlates };
-}
-
-// Detect which mesh face layer the coupler holes belong to by proximity.
-// Detection axis is determined from layer naming — not from coupler geometry:
-//   F*/N* layers present → wall cage → faces separated in Y → compare Y
-//   T*/B* layers present → slab cage → faces separated in Z → compare Z
-// Returns e.g. 'F1A', 'T1A', or null if no face layers in allData.
-function _detectFaceName(holes) {
-    const faceRe = /^[FNTB]\d/i;
-    const layerCoords = {};
-    for (const bar of allData) {
-        const layer = bar.Avonmouth_Layer_Set;
-        if (!layer || !faceRe.test(layer)) continue;
-        const y = bar.Start_Y ?? bar.End_Y;
-        const z = bar.Start_Z ?? bar.End_Z;
-        if (y == null && z == null) continue;
-        if (!layerCoords[layer]) layerCoords[layer] = [];
-        layerCoords[layer].push({ y, z });
-    }
-    if (!Object.keys(layerCoords).length) return null;
-    const median = arr => { const s = [...arr].filter(v => v != null).sort((a, b) => a - b); return s[Math.floor(s.length / 2)]; };
-    // Wall (F/N) → detect by Y; Slab (T/B) → detect by Z
-    const hasFN = Object.keys(layerCoords).some(l => /^[FN]\d/i.test(l));
-    const holeMedian = hasFN ? median(holes.map(h => h.yMm)) : median(holes.map(h => h.zMm));
-    let bestLayer = null, bestDist = Infinity;
-    for (const [layer, pts] of Object.entries(layerCoords)) {
-        const vals = hasFN ? pts.map(p => p.y) : pts.map(p => p.z);
-        const dist = Math.abs(median(vals) - holeMedian);
-        if (dist < bestDist) { bestDist = dist; bestLayer = layer; }
-    }
-    return bestLayer;
 }
 
 // Detects the axis that separates the F/N (or T/B) face layers in global coordinates.

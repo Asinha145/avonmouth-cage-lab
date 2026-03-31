@@ -254,6 +254,11 @@ class IFCParser {
                 else if (nl === 'layer name' && psetName === 'ATK Couplers Parts' && !bar.ATK_Layer_Name) {
                     bar.ATK_Layer_Name = v;
                 }
+                // ── ATK Couplers Parts: coupler body weight in kg (IFCBEAM, not a vendor rebar pset)
+                else if (nl === 'coupler weight' && psetName === 'ATK Couplers Parts') {
+                    const w = parseFloat(v);
+                    if (w > 0) bar.Weight = w;
+                }
             });
         });
         // Normalise blank Avonmouth layer to null
@@ -291,7 +296,7 @@ class IFCParser {
                 globalId     : m[2],
                 layer        : obj.Avonmouth_Layer_Set,
                 atkLayerName : obj.ATK_Layer_Name,
-
+                weight       : obj.Weight ?? null,  // ATK Couplers Parts 'Coupler weight' (kg)
             });
         });
         return couplerMap;
