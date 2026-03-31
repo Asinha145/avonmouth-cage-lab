@@ -32,25 +32,32 @@ classifies bars via `js/ifc-parser.js`, and verifies:
 | Pinned mm values ±20mm | Regressions in bbox computation or coordinate conversion |
 
 ### Pinned values (P7019_C1.ifc)
-| Property | Value |
-|---|---|
-| meshWidth | 1347 mm |
-| meshLength | 11082 mm |
-| height | 5080 mm |
-| overallWidth | 1389 mm |
-| overallLength | 11082 mm |
+
+These match the `GROUND_TRUTH` object in `test-dims.mjs`:
+
+| Property | Value | Source |
+|---|---|---|
+| `edbWidth` | 1389 mm | `allBarBbox` — all bar types (includes struts) |
+| `edbLength` | 11082 mm | `meshBbox` — mesh bars only |
+| `edbHeight` | 5080 mm | `meshBbox` — mesh bars only |
+| `height` | 5311 mm | `totalBrepBbox` — all geometry unconditional |
+| `overallWidth` | 1389 mm | `totalBrepBbox` |
+| `overallLength` | 11282 mm | `totalBrepBbox` — includes coupler heads at bar ends |
 
 ---
 
 ## What each dimension means
 
-| Dimension | Source | Used by |
-|---|---|---|
-| `overallWidth` | BREP bbox of ALL bars (mesh + strut + link + loose) | Website display (`dim-width`) |
-| `overallLength` | BREP bbox of ALL bars | Website display (`dim-length`) |
-| `meshWidth` | BREP bbox of Mesh bars only | Excel cage-sequence, EDB autofill |
-| `meshLength` | BREP bbox of Mesh bars only | Excel cage-sequence |
-| `height` | Mesh bars bbox (IFC Z / web-ifc Y span) | Both |
+| Dimension | Source bbox | Gate | Used by |
+|---|---|---|---|
+| `overallWidth` | `totalBrepBbox` | None — unconditional | Website display |
+| `overallLength` | `totalBrepBbox` | None — unconditional | Website display |
+| `edbWidth` | `allBarBbox` | Any bar in `barMap` | EDB width cell |
+| `edbLength` | `meshBbox` | `Bar_Type === 'Mesh'` | EDB length cell |
+| `edbHeight` | `meshBbox` | `Bar_Type === 'Mesh'` | EDB height cell, height card |
+| `height` | `totalBrepBbox` | None — unconditional | Website overall height |
+
+Note: `totalBrepBbox` > `allBarBbox` ≥ `meshBbox` — each bbox is a progressively tighter filter. Overall values include coupler heads protruding beyond bar body ends.
 
 ---
 

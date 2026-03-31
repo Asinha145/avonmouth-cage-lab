@@ -1,152 +1,191 @@
-# Template DXF — F1A Face Elevation
+# Template DXF — Formwork Face Plate Template
 
-Generates a DXF drawing of the F1A end-plate showing strut bar coupler holes with correct positions and sizes, derived directly from IFC geometry.
+Generates a dimensioned DXF drawing of each formwork face plate showing the exact positions and sizes of VS/HS strut coupler holes. Derived directly from IFCBEAM placement coordinates in the IFC file.
 
 ---
 
 ## What It Produces
 
-A flat 2D DXF (AutoCAD R12 / AC1009) of the F1A face plate as seen in elevation:
+A flat 2D DXF (AutoCAD R12 / AC1009) showing one labelled section per formwork face (F1A, N1A, T1A, etc.):
 
-- **X axis** = IFC-X (cage length direction)
-- **Y axis** = IFC-Z (cage height direction)
-- One circle per VS/HS strut coupler hole
-- Each hole labelled `{CAGE_REF}-CPLR-SID-NNN`
-- Border, title block, span dimensions, X/Z tick marks
+- One circle per VS/HS strut coupler hole, sized at coupler OD + 2mm
+- Each hole labelled `{CAGE_REF}-CPLR-NNN` (sequential, sorted by px then pz)
+- Plate outlines with 25mm edge clearance from nearest hole edge
+- Overall dimension lines (length × width mm) per plate
+- Section headers and title block
 
-**Layers in the DXF:**
+**DXF layers:**
 
 | Layer | Contents |
 |---|---|
-| `PLATE_OUTLINE` | Drawing border and title separator |
+| `PLATE_OUTLINE` | Plate rectangles |
 | `HOLES` | Coupler hole circles |
-| `TEXT` | Title block text and hole labels |
-| `DIMS` | Span dimensions and tick marks |
+| `TEXT` | Labels, plate IDs, section headers |
+| `DIMS` | Span and clearance dimension lines |
 
 ---
 
-## How Hole Positions Are Determined
+## Pipeline Overview
 
-Hole positions come from **IFCBEAM placement coordinates**, not from bar `startX`/`startZ`.
+```
+IFC text
+  └─ _parseIFCBeamHoles()   → [{xMm, yMm, zMm, holeDia, layer}, ...]  (VS/HS only)
+        └─ _bucketHolesByFace()  → { 'F1A': [...], 'N1A': [...], ... }
+              └─ per face: derive px, pz → _computePlates()  → vsPlates, hsPlates
+                    └─ drawPlates() → DXF emit
+```
 
-### Why IFCBEAM, Not Bar Placement
+---
 
-VS/HS strut bars (N1-CPLR-L type) run in the IFC-Y direction. Their IFC placement origin is at the N1A face end, meaning `startX`/`startZ` is correct in X and Z but does not represent where the coupler sits. The IFCBEAM entity (the physical coupler head) is placed at the correct global position on the F1A face.
+## Step 1 — Parsing Holes (`_parseIFCBeamHoles`)
+
+### Why IFCBEAM, Not Bar Positions
+
+VS/HS strut bars run perpendicular to the face. Their rebar start/end coordinates do not reliably give hole positions. The IFCBEAM entity (physical coupler head) is placed at the exact global position on the face.
 
 ### Placement Chain
 
 ```
-IFCBEAM → IFCLOCALPLACEMENT($, axis_id)
+IFCBEAM → IFCLOCALPLACEMENT([$ or #N], #axId)
                 ↓
-          IFCAXIS2PLACEMENT3D(cp_id, ...)
+          IFCAXIS2PLACEMENT3D(#cpId, ...)
                 ↓
-          IFCCARTESIANPOINT((X, Y, Z))   ← absolute global mm
+          IFCCARTESIANPOINT((X_global, Y_global, Z_global))  ← absolute BNG mm
 ```
 
-`IFCLOCALPLACEMENT($, ...)` — the `$` (no parent) means absolute global coordinates in BNG-offset mm.
+Tekla encodes global BNG coordinates directly in the CartesianPoint regardless of whether `IFCLOCALPLACEMENT` has a parent ref (`#N`) or `$`. No parent chain walk needed.
 
-- **Hole X** = IFCBEAM global X − min X of all F1A strut couplers
-- **Hole Z** = IFCBEAM global Z − min Z of all F1A strut couplers
+**Regex must handle both:**
+```javascript
+/#(\d+)=IFCLOCALPLACEMENT\([^,)]*,#(\d+)\)/g   // [^,)]* matches $ or #14 or #3417
+```
 
----
+### Hole Size
 
-## How Hole Sizes Are Determined
+`holeDia = IFCBEAM ATK EMBEDMENTS pset HEIGHT + 2mm`
 
-Hole diameter = **IFCBEAM HEIGHT** (coupler body OD) **+ 2 mm** tolerance.
+Do not use bar `Size` (rebar diameter). Use the coupler body OD.
 
-Source: `ATK EMBEDMENTS` property set on each IFCBEAM → `HEIGHT` property (IFCLENGTHMEASURE).
-
-Do **not** use bar rebar diameter (`Size`) or the FPGS code second field — those are the rebar size, not the coupler OD.
-
-### Coupler Model → OD → Hole Size
-
-| Coupler model | IFCBEAM HEIGHT (OD) | Hole diameter |
+| Coupler | HEIGHT (OD) | Hole dia |
 |---|---|---|
-| AG16 | 25 mm | **27 mm** |
-| AG20N | 31 mm | **33 mm** |
-| AG25 | 38 mm | **40 mm** |
-| AG32N | 47 mm | **49 mm** |
+| AG20N | 31mm | **33mm** |
+| AG25  | 38mm | **40mm** |
+| AG32N | 47mm | **49mm** |
+| AG40N | 61mm | **63mm** |
+
+### Layer Filter
+
+Only beams where Avonmouth pset `Layer/Set` matches `/^[VH]S/i` (VS1, VS2, HS1, HS2, etc.) are included. Face mesh bars (F1A, N1A), preload bars (PRL, PRC) are excluded.
+
+### Performance
+
+An `entityMap = new Map()` is built in one `matchAll` pass at function entry. All subsequent pset/placement lookups use this map in O(1). Do **not** call `new RegExp(#N=...)` per lookup — it scans the full file each time and locks the main thread on files ≥1MB.
 
 ---
 
-## Face Filter — F1A Only
+## Step 2 — Face Bucketing (`_bucketHolesByFace` + `_detectFaceSepAxis`)
 
-Each cage has couplers on both faces (N1A and F1A). The template shows F1A only.
+### Face Separation Axis Detection
 
-**Filter:** IFCBEAM Y > midpoint of (min coupler Y, max coupler Y)
+`_detectFaceSepAxis()` determines which IFC axis separates the F/N (or T/B) face layers.
 
-For cage 1613 (2HD70719AC1):
-- N1A couplers: Y ≈ 6,009,939–6,009,982 mm
-- F1A couplers: Y ≈ 6,010,217–6,010,261 mm
-- Midpoint: Y = 6,010,100 mm
+**Algorithm:** Compare the maximum within-layer spread on X vs Y across all face layers from `allData`. Face bars are tightly clustered on the separation axis (all F1A bars share approximately the same depth-in-wall X) and spread the full cage length on the other axis.
 
-The IFCBEAM is placed ~10 mm inside the F1A outer face plate. The coupler body then projects outward through and beyond the face plate.
-
----
-
-## Layer Filter — VS/HS Strut Bars Only
-
-The cage contains many IFCBEAM couplers beyond the strut bars (slab connection bars, preload bars, end bars). Only VS/HS strut couplers appear in the template.
-
-**Filter:** Avonmouth pset `Layer/Set` property on the IFCBEAM matches `/^[VH]S/i`
-
-| Layer/Set value | Included |
-|---|---|
-| VS1, VS2, VS3 | ✅ strut bars |
-| HS1, HS2 | ✅ strut bars |
-| F1A, N1A | ❌ face mesh bars |
-| PRL, PRC | ❌ preload bars |
-
-For cage 1613 this yields **38 strut holes** from 238 total IFCBEAM couplers.
-
----
-
-## IFC Property Chain Summary
-
-```
-IFCBEAM
- ├─ ATK EMBEDMENTS pset → HEIGHT = coupler OD (mm)
- ├─ Avonmouth pset      → Layer/Set = VS1 / VS2 / HS1 etc.
- └─ IFCLOCALPLACEMENT($, ...) → X, Y, Z (absolute global mm)
+```javascript
+const maxRange = (key) => Math.max(...layers.map(pts => {
+    const vals = pts.map(p => p[key]).filter(v => v != null).sort((a,b) => a-b);
+    return vals.length >= 2 ? vals[vals.length-1] - vals[0] : 0;
+}));
+return maxRange('x') < maxRange('y') ? 'x' : 'y';   // smallest max-range = sep axis
 ```
 
-> **Note on `connected_rebar`:** The Bylor pset on IFCBEAM has a `connected_rebar` property pointing to the associated CPLR bar GlobalId. This link is a Tekla batch-reference — the referenced bar may be at a different X,Z location. Do not use `connected_rebar` to derive hole position; always read the IFCBEAM's own placement.
+**Do not use `cageAxisName`** — for P7349 the parser returns `'Z'` (vertical bars dominate the detection), not `'Y'`. This makes `cageAxisName` unreliable as a proxy for wall orientation.
+
+| Cage type | sepAxis | Reason |
+|---|---|---|
+| P7349 (wall runs in Y) | `'x'` | xMaxRange≈50mm vs yMaxRange≈10,267mm |
+| Wall running in X | `'y'` | yMaxRange≈50mm vs xMaxRange≈(wall length) |
+| Slab/roof (T/B layers) | `'z'` | T/B present, F/N absent |
+
+### Bucketing
+
+Each hole is assigned to the face layer whose median on `sepAxis` is nearest. All 6 face layers (F1A, F3A, F5A, N1A, N3A, N5A) participate — VS/HS couplers land on the outermost layers (F1A, N1A) since their X positions match the outer face bar X positions.
 
 ---
 
-## Implementation
+## Step 3 — Coordinate Projection (px, pz)
 
-### cage-lab / cage-v2 (client-side, browser)
+Per face bucket, holes are projected onto the face plate coordinate system:
 
-`js/main.js` — two functions:
+| Variable | Wall (faces in X, `sepAxis='x'`) | Slab (`useY=true`) |
+|---|---|---|
+| `useY` | `false` (Z span > 100mm) | `true` (Z span < 100mm) |
+| `useLongY` | `faceSepAxis === 'x' && !useY` = **true** | `false` |
+| `px` (long = cage length) | `yMm − globalMinY` | `xMm − globalMinX` |
+| `pz` (height / narrow) | `zMm − minFaceZ` | `yMm − minFaceY` |
 
-| Function | Purpose |
-|---|---|
-| `_parseIFCBeamHoles(ifcText)` | Parses raw IFC text; returns `[{xMm, zMm, holeDia}]` |
-| `exportTemplateDXF()` | Calls parser, builds DXF string, triggers browser download |
-
-Raw IFC text is stored in `_rawIfcText` when the file is loaded in `processFile()`. No re-read required at export time.
-
-Button: `#export-template-dxf-btn` — shown for wall cages, hidden for slab cages.
-
-### de-tool (server-side, Node/Express)
-
-`server/routes/projects.js` — `GET /:id/template-drawing`
-
-| Function | Purpose |
-|---|---|
-| `parseIFCBeamHoles(ifcText)` | Same algorithm; reads IFC from `file.stored_path` |
-| Route handler | Streams DXF as `application/dxf` attachment |
+`useLongY = faceSepAxis === 'x' && !useY` — when faces are in X, length runs in Y.
 
 ---
 
-## Output Spec
+## Step 4 — Plate Computation (`_computePlates`)
 
-| Field | Value |
-|---|---|
-| DXF version | AC1009 (AutoCAD R12) |
-| Units | mm |
-| Origin | Bottom-left of coupler extent (min X, min Z) |
-| Border margin | 100 mm each side |
-| Title block height | 70 mm |
-| Hole label format | `{CAGE_REF}-CPLR-SID-NNN` (sequential, sorted left→right, bottom→top) |
+### VS Plates
+
+Long axis = pz (Z direction, height). Auto-detected:
+```javascript
+// More unique pz positions → long=Z (wall); more unique px → long=X (slab)
+zUniq >= xUniq ? { bandKey:'px', groupKey:'pz' } : { bandKey:'pz', groupKey:'px' }
+```
+
+### HS Plates
+
+Long axis = px (cage length direction). **Hardcoded:**
+```javascript
+const hsOri = { bandKey:'pz', groupKey:'px' };   // always long=X
+```
+Auto-detect is unreliable for HS — when few unique pz values (e.g. 2 Z rows), the unique-count comparison breaks down.
+
+### Band-and-Group Algorithm
+
+1. Sort holes by `bandKey` (narrow axis, maxWidth=300mm)
+2. Greedily group into bands: expand band until adding next hole would exceed `maxWidth`
+3. Within each band, sort by `groupKey` (long axis, maxLength=2000mm)
+4. Greedily group into plates: expand plate until exceeding `maxLength`
+5. Each plate adds 25mm clearance beyond the outermost hole edge
+
+---
+
+## Step 5 — DXF Emit
+
+DXF format: AC1009 (AutoCAD R12). All coordinates in mm. One section per face, VS plates above HS plates within each section.
+
+Plate label format: `{TYPE}-PLATE-{NN}  {length} x {width} mm  ({N} holes)`
+Hole label format: `{CAGE_REF}-CPLR-{NNN}` (sequential per face, sorted px then pz)
+
+---
+
+## P7349 Verified Output (31 Mar 2026)
+
+Wall cage running in Y (10,267mm), thickness 1,357mm (F-face to N-face in X), 162 total VS/HS holes.
+
+| Face | VS holes | HS holes | VS plates | HS plates |
+|---|---|---|---|---|
+| F1A | 25 | 49 | 2 | 6 |
+| N1A | 0 | 88 | 0 | 5 |
+
+**N1A HS plate breakdown:**
+- 5 plates, plates 2–4 each have 20 holes (10 × 2 parallel rows at 135mm Z spacing)
+- Plate dimensions ≈ 1850×217mm (long in Y/cage-length, short in Z/height)
+- `sepAxis='x'`, `useLongY=true`, `px = yMm − globalMinY` ✓
+
+---
+
+## Key Rules (Do Not Change Without Updating This Doc)
+
+1. Face sep axis from `_detectFaceSepAxis()` only — never from `cageAxisName`
+2. `useLongY = faceSepAxis === 'x' && !useY` — do not rewrite as `cageAxisName === 'Y'`
+3. HS orientation hardcoded `{ bandKey:'pz', groupKey:'px' }` — do not auto-detect
+4. entityMap built once at `_parseIFCBeamHoles` entry — never call `new RegExp(#N=...)` per lookup
+5. Hole size from IFCBEAM `ATK EMBEDMENTS HEIGHT + 2mm` — not from bar `Size`
+6. IFCBEAM position from its own CartesianPoint — not from `connected_rebar` bar position

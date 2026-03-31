@@ -59,17 +59,11 @@ Never assume cage-lab is up to date — always check the cage-v2 commit hash bef
 
 ## Active Workstreams
 
-### 1. Coupler Geometry Investigation (`tasks/pop.md`)
+### 1. Coupler Geometry Investigation (`tasks/pop.md`) — ⏸ PENDING
 
 **Problem:** 9 VS2 bars (Dir_Y=1.0) have `Start_Y` inside the N1A zone but `End_Y` at ~808mm
 (far beyond F1A at 346mm). The ~460mm overshoot is the IFCBEAM coupler head entity on the F1A
 face driving the bar's IFC placement origin to the coupler's far end.
-
-**Goals:**
-- Identify which IFC entity / property drives `End_Y` to ~808mm
-- Determine whether `End_Y` should be clamped to bar body length or read from a different pset
-- Cross-check BREP geometry: bar body length vs coupler entity extent
-- Implement the outside-zone detection fix
 
 **Detection fix (to implement):**
 ```javascript
@@ -79,7 +73,17 @@ const minY = Math.min(b.Start_Y ?? Infinity,  b.End_Y ?? Infinity);
 const outside = minY < N1A_ABS_MIN || maxY > F1A_ABS_MAX;
 ```
 
-### 2. EDB Template Making
+### 2. Template DXF — ✅ COMPLETE (31 Mar 2026)
+
+Verified against P7349 (10,267mm Y-running wall cage, 162 holes) and earlier cages (1613, 1704, RF35).
+
+**Key design decisions locked:**
+- `_detectFaceSepAxis()` — geometry-based, no dependence on `cageAxisName`
+- `useLongY = faceSepAxis === 'x' && !useY` — px maps to cage length direction
+- HS orientation hardcoded: `{ bandKey:'pz', groupKey:'px' }`
+- `entityMap` O(1) lookup — built once per `_parseIFCBeamHoles` call
+
+### 3. EDB Template Making — 🔄 ONGOING (local only)
 
 - Templates live in `templates/` locally but are gitignored
 - Work involves testing new template structures against live IFC files

@@ -46,9 +46,31 @@ const count = /^[VH]S/i.test(key) ? rebarCount : rebarCount + couplerCount;
 
 ---
 
-## 7. Face Bucketing Axis Fix (cageAxisName-aware)
-**File:** `js/main.js` → `_bucketHolesByFace`
-**Change:** Was always comparing Y to separate F/N faces. P7349 wall runs in Y so faces are separated in X. Now derives separation axis from `cageAxisName`:
-- `'Y'` → compare X
-- `'X'` → compare Y
-- T/B slab layers → Z
+## 7. Face Bucketing Axis Fix (geometry-based, NOT cageAxisName)
+**File:** `js/main.js` → `_detectFaceSepAxis()` (new), `_bucketHolesByFace`
+**Change:** Was comparing Y to separate F/N faces. P7349 wall runs in Y so faces are in X — but `cageAxisName` for P7349 is `'Z'` (not 'Y'), so a `cageAxisName === 'Y'` guard never fires.
+**Correct approach:** `_detectFaceSepAxis()` compares max within-layer spread on X vs Y. F1A bars cluster at X±50mm, spread 10,267mm in Y → `sepAxis='x'`. No dependence on `cageAxisName`.
+
+---
+
+## 8. px Axis Fix — useLongY from faceSepAxis
+**File:** `js/main.js` → `exportTemplateDXF`
+**Change:** `useLongY = faceSepAxis === 'x' && !useY` (was `cageAxisName === 'Y' && !useY`). For P7349, this ensures `px = yMm` (cage Y length), not `xMm` (wall thickness direction, only 2 discrete values).
+
+---
+
+## 9. HS Plate Orientation Hardcoded
+**File:** `js/main.js` → `_computePlates`
+**Change:** `hsOri = { bandKey:'pz', groupKey:'px' }` always. Removed auto-detect for HS. HS struts are always horizontal along cage length — auto-detect was unreliable when px was previously broken (only 2 unique values → xUniq=1 → wrongly chose long=Z).
+
+---
+
+## 10. entityMap Performance Fix
+**File:** `js/main.js` → `_parseIFCBeamHoles`
+**Change:** One-pass `Map` build at function entry replaces per-call `new RegExp(#N=...)` lookups. Was O(n) per lookup scanning the full file — caused "page not responding" on P7349 (5.5MB, thousands of IFCBEAM pset chain lookups). Now O(1) per lookup after one O(n) build.
+
+---
+
+## 11. Progress Bar for Large Files
+**File:** `js/main.js` → `exportTemplateDXF`
+**Change:** Function is now `async`. Uses `showProgress()` / `updateProgress()` and `yield_ = () => new Promise(r => setTimeout(r, 0))` between stages. UI stays responsive on files >1MB. Progress stages: parse (0%), bucket (55%), compute plates (70%), build DXF (85%), save (98%), done (100%).
