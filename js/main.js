@@ -1520,11 +1520,40 @@ function _detectFaceName(holes) {
     return bestLayer;
 }
 
+// Detects the axis that separates the F/N (or T/B) face layers in global coordinates.
+// Uses the spread of face-layer median positions — no dependence on cageAxisName.
+//   Wall with faces in X (e.g. P7349, runs in Y): xSpread >> ySpread → 'x'
+//   Wall with faces in Y (e.g. runs in X): ySpread >> xSpread → 'y'
+//   Slab/roof (T/B layers, no F/N): always 'z'
+function _detectFaceSepAxis() {
+    const faceRe = /^[FNTB]\d/i;
+    const layerCoords = {};
+    for (const bar of allData) {
+        const layer = bar.Avonmouth_Layer_Set;
+        if (!layer || !faceRe.test(layer)) continue;
+        const x = bar.Start_X ?? bar.End_X;
+        const y = bar.Start_Y ?? bar.End_Y;
+        const z = bar.Start_Z ?? bar.End_Z;
+        if (x == null && y == null && z == null) continue;
+        if (!layerCoords[layer]) layerCoords[layer] = [];
+        layerCoords[layer].push({ x, y, z });
+    }
+    const hasFN = Object.keys(layerCoords).some(l => /^[FN]\d/i.test(l));
+    const hasTB = Object.keys(layerCoords).some(l => /^[TB]\d/i.test(l));
+    if (hasTB && !hasFN) return 'z';
+    // Detect by within-layer spread: face bars cluster tightly on the sep axis
+    // (all bars in F1A share the same depth-in-wall X, spread wide in Y along wall length).
+    // The separation axis is the one with the SMALLEST maximum within-layer range.
+    const layers = Object.values(layerCoords);
+    const maxRange = (key) => Math.max(...layers.map(pts => {
+        const vals = pts.map(p => p[key]).filter(v => v != null).sort((a,b) => a-b);
+        return vals.length >= 2 ? vals[vals.length-1] - vals[0] : 0;
+    }));
+    return maxRange('x') < maxRange('y') ? 'x' : 'y';
+}
+
 // Assigns every hole to its nearest mesh face layer (F1A/N1A or T1A/B1A) by proximity.
-// Face separation axis is derived from cageAxisName:
-//   cageAxisName='Y' → wall runs in Y → faces separated in X → compare xMm / Start_X
-//   cageAxisName='X' → wall runs in X → faces separated in Y → compare yMm / Start_Y
-//   T/B slab layers  → always Z
+// Face separation axis is auto-detected from face layer geometry (see _detectFaceSepAxis).
 // Returns { 'F1A': [...], 'N1A': [...] } — only populated faces included.
 // Fallback when allData has no face layers: split by hole midpoint on the separation axis.
 function _bucketHolesByFace(holes) {
@@ -1541,13 +1570,8 @@ function _bucketHolesByFace(holes) {
         layerCoords[layer].push({ x, y, z });
     }
 
-    // Determine separation axis: slab (T/B) → Z; wall running in Y → X; else → Y
-    const hasFN = Object.keys(layerCoords).some(l => /^[FN]\d/i.test(l));
-    const hasTB = Object.keys(layerCoords).some(l => /^[TB]\d/i.test(l));
-    let sepAxis; // 'x' | 'y' | 'z'
-    if (hasTB && !hasFN)      sepAxis = 'z';
-    else if (cageAxisName === 'Y') sepAxis = 'x';
-    else                      sepAxis = 'y';
+    // Determine separation axis from face layer geometry (not cageAxisName)
+    const sepAxis = _detectFaceSepAxis();
 
     const holeVal  = h => sepAxis === 'x' ? h.xMm  : sepAxis === 'z' ? h.zMm  : h.yMm;
     const barVal   = p => sepAxis === 'x' ? p.x     : sepAxis === 'z' ? p.z    : p.y;
@@ -1691,6 +1715,10 @@ async function exportTemplateDXF(maxLength, maxWidth) {
         };
 
         // Draw one section per face
+        // Face separation axis tells us which IFC axis the holes spread along for px.
+        // sepAxis='x' → faces in X → length is in Y → useLongY=true for wall faces
+        // sepAxis='y' → faces in Y → length is in X → useLongY=false
+        const faceSepAxis = _detectFaceSepAxis();
         let totalPlates = 0, totalVS = 0, totalHS = 0;
         for (const [faceName, faceHoles] of Object.entries(faceBuckets)) {
             // Detect face plane per face group
@@ -1699,11 +1727,12 @@ async function exportTemplateDXF(maxLength, maxWidth) {
             const useY  = zSpan < 100;
             const minP  = useY ? Math.min(...faceHoles.map(h => h.yMm)) : Math.min(...faceZ);
 
-            // px follows cage long axis:
-            //   cageAxisName='Y' wall cage → holes vary in IFC-Y → use yMm
-            //   slab (useY=true) or cageAxisName='X'/'Z' → use xMm
-            const useLongY = cageAxisName === 'Y' && !useY;
-            console.log(`[DXF] face=${faceName} | zSpan=${zSpan.toFixed(0)}mm | useY=${useY} | useLongY=${useLongY} | holes=${faceHoles.length}`);
+            // px follows cage length axis (perpendicular to face separation axis):
+            //   faceSepAxis='x' → faces separated in X → length runs in Y → use yMm
+            //   faceSepAxis='y' → faces separated in Y → length runs in X → use xMm
+            //   slab (useY=true) → always xMm (useY already handles pz from yMm)
+            const useLongY = faceSepAxis === 'x' && !useY;
+            console.log(`[DXF] face=${faceName} | sepAxis=${faceSepAxis} | zSpan=${zSpan.toFixed(0)}mm | useY=${useY} | useLongY=${useLongY} | holes=${faceHoles.length}`);
             const plotHoles = faceHoles
                 .map(h => ({ ...h,
                     px: +(useLongY ? h.yMm - globalMinY : h.xMm - globalMinX).toFixed(1),
