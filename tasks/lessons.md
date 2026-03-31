@@ -260,3 +260,55 @@ const holeMedian = hasFN ? median(holes.map(h => h.yMm)) : median(holes.map(h =>
 **Also:** IFCBEAM placement origin = inner face of coupler (bar-connection end). Protruding free end = origin + refDir × coupler length. ATK Coordinate Point property = coupler midpoint = origin + refDir × length/2 (cross-check only).
 
 ---
+
+## Template DXF — px Axis Wrong for Y-Running Cages (March 2026)
+
+**Mistake:** `exportTemplateDXF` always computed `px = h.xMm - globalMinX`. For a cage running in Y (cageAxisName='Y', e.g. P7349), all VS/HS couplers on the same face share the same IFC-X value (~1,979,360 for F face). Every hole got `px=0` — the entire plate drew as a single vertical line with all holes stacked on top of each other.
+
+**Root cause:** The IFC-X axis is the wall **thickness** direction for a Y-running cage. Hole distribution along the **length** of the wall lives in IFC-Y, not IFC-X.
+
+**Rule:** `px` must follow the cage long axis:
+- `cageAxisName='Y'` wall cage (useY=false) → `px = h.yMm - globalMinY`
+- Slab (useY=true) or `cageAxisName='X'/'Z'` → `px = h.xMm - globalMinX`
+
+```javascript
+const useLongY = cageAxisName === 'Y' && !useY;
+px: +(useLongY ? h.yMm - globalMinY : h.xMm - globalMinX).toFixed(1)
+```
+
+**Why `!useY` guard:** For a slab cage, `pz` already uses `yMm` (face plane is X-Y). Using `yMm` for `px` too would collapse both axes onto the same coordinate.
+
+---
+
+## Template DXF — HS Plate Orientation Must Be Hardcoded (March 2026)
+
+**Mistake:** `_computePlates` used `getOrientation(hsHoles)` (auto-detect from unique X vs Z count) for HS plates. When `px` was broken (all zeros), `xUniq=1` and `zUniq=many`, so HS incorrectly got `long=Z` — producing tall thin plates stacked vertically instead of wide horizontal plates.
+
+**Rule:** HS struts are always horizontal along the cage length → plate long axis is always X (horizontal). Hardcode:
+```javascript
+const hsOri = { bandKey: 'pz', groupKey: 'px' };  // HS always long=X
+```
+
+VS struts keep auto-detect: `long=Z` for wall cages, `long=X` for slab cages (where VS run horizontally in global space).
+
+**Physical rule:**
+- VS plates: long axis = Z (height direction) on wall cages, long axis = X on slab cages — auto-detect handles both.
+- HS plates: long axis = X (length direction) always — hardcode, no auto-detect needed.
+
+---
+
+## P7349 Coupler Pop-Out — Confirmed Against Face Geometry (March 2026)
+
+**Finding:** All 162 VS/HS couplers in P7349 sit at exactly two IFC-X positions: ~1,979,360 (F face) and ~1,980,640 (N face). They pop through the **outermost** mesh faces only (F1A and N1A) — no couplers at intermediate layers (F3A, F5A, N3A, N5A).
+
+**Pop-out geometry (AG20N, 110mm barrel):**
+- F face: origin 36mm inside F1A outer face → free end 74mm beyond F1A outer face
+- N face: origin 32mm inside N1A outer face → free end 78mm beyond N1A outer face
+
+**Rule:** Every VS/HS coupler barrel starts within the face bar's cross-section zone and protrudes outward through the formwork face. The formwork hole is what the template DXF is generating.
+
+**Cache note:** The pre-fix diagnostic in `docs/cache-p7349-c1.md` recorded F1A=63, N3A=46, F3A=26, N5A=2 — this was from Y-based bucketing (old bug) which split holes by Y position into 4 groups. The correct X-based result is F1A=74, N1A=88.
+
+**VS1 asymmetry:** All 25 VS1 couplers are on the F face only (zero on N face) — VS1 struts in P7349 are single-ended on the F1A side.
+
+---
