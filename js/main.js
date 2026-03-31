@@ -73,7 +73,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('export-struts-btn').addEventListener('click', () => exportEDB('struts'));
     document.getElementById('export-slab-btn').addEventListener('click',   () => exportSlabEDB());
     document.getElementById('export-report-btn').addEventListener('click', () => exportCageReport());
-    document.getElementById('export-template-dxf-btn').addEventListener('click', () => exportTemplateDXF(2000, 300));
+    document.getElementById('export-template-dxf-btn').addEventListener('click', () => exportTemplateDXF(2000, 300).catch(e => console.error(e)));
     document.getElementById('edb-wall-thickness').addEventListener('input', updateEDBComputedInfo);
 
     document.getElementById('page-prev').addEventListener('click', () => {
@@ -1476,8 +1476,8 @@ function _computePlates(plotHoles, maxLength, maxWidth) {
             : { bandKey: 'pz', groupKey: 'px' };   // long=X: band narrow Z, group long X
     }
 
-    const vsOri = getOrientation(vsHoles);
-    const hsOri = getOrientation(hsHoles);
+    const vsOri = getOrientation(vsHoles);                        // auto-detect: long=Z wall, long=X slab
+    const hsOri = { bandKey: 'pz', groupKey: 'px' };             // HS always long=X (horizontal along cage length)
 
     const vsPlates = bandAndGroup(vsHoles, vsOri.bandKey, vsOri.groupKey).map((h, i) => toPlate(h, i, 'VS'));
     const hsPlates = bandAndGroup(hsHoles, hsOri.bandKey, hsOri.groupKey).map((h, i) => toPlate(h, i, 'HS'));
@@ -1578,20 +1578,32 @@ function _bucketHolesByFace(holes) {
     return Object.fromEntries(Object.entries(buckets).filter(([, h]) => h.length > 0));
 }
 
-function exportTemplateDXF(maxLength, maxWidth) {
+async function exportTemplateDXF(maxLength, maxWidth) {
     const btn = document.getElementById('export-template-dxf-btn');
     const orig = btn.textContent;
+    const yield_ = () => new Promise(r => setTimeout(r, 0));
     btn.textContent = 'Generating…'; btn.disabled = true;
+    showProgress(); updateProgress(0, 'Parsing IFC coupler geometry…');
 
     try {
         if (!_rawIfcText) throw new Error('No IFC data loaded. Please analyse a cage first.');
+        await yield_();
+
         const allHoles = _parseIFCBeamHoles(_rawIfcText);
         if (!allHoles.length) throw new Error('No VS/HS strut coupler holes found in this IFC.');
 
+        updateProgress(55, `Found ${allHoles.length} VS/HS holes — bucketing by face…`);
+        await yield_();
+
         // Bucket holes by face (F1A/N1A or T1A/B1A) using proximity to face layer bar positions
         const faceBuckets = _bucketHolesByFace(allHoles);
-        // Shared X origin across all faces so plates align horizontally in the DXF
+        // Long-axis origin: shared across all face sections so plates align in the DXF.
+        // cageAxisName='Y' wall cage → px follows IFC-Y (cage length); else px follows IFC-X.
         const globalMinX = Math.min(...allHoles.map(h => h.xMm));
+        const globalMinY = Math.min(...allHoles.map(h => h.yMm));
+
+        updateProgress(70, 'Computing plates…');
+        await yield_();
 
         const fileEl  = document.getElementById('ifc-file');
         const fname   = fileEl?.files[0]?.name || 'CAGE';
@@ -1611,6 +1623,9 @@ function exportTemplateDXF(maxLength, maxWidth) {
             LINE(x, z0, x, z1, 'DIMS'); LINE(x-4, z0, x+4, z0, 'DIMS'); LINE(x-4, z1, x+4, z1, 'DIMS');
             TEXT(x+5, (z0+z1)/2, String(label), 7, 'DIMS');
         };
+
+        updateProgress(85, 'Building DXF…');
+        await yield_();
 
         emit('0','SECTION','2','HEADER','9','$ACADVER','1','AC1009','0','ENDSEC');
         emit('0','SECTION','2','ENTITIES');
@@ -1679,8 +1694,14 @@ function exportTemplateDXF(maxLength, maxWidth) {
             const useY  = zSpan < 100;
             const minP  = useY ? Math.min(...faceHoles.map(h => h.yMm)) : Math.min(...faceZ);
 
+            // px follows cage long axis:
+            //   cageAxisName='Y' wall cage → holes vary in IFC-Y → use yMm
+            //   slab (useY=true) or cageAxisName='X'/'Z' → use xMm
+            const useLongY = cageAxisName === 'Y' && !useY;
             const plotHoles = faceHoles
-                .map(h => ({ ...h, px: +(h.xMm - globalMinX).toFixed(1), pz: +((useY ? h.yMm : h.zMm) - minP).toFixed(1) }))
+                .map(h => ({ ...h,
+                    px: +(useLongY ? h.yMm - globalMinY : h.xMm - globalMinX).toFixed(1),
+                    pz: +((useY ? h.yMm : h.zMm) - minP).toFixed(1) }))
                 .sort((a, b) => a.px !== b.px ? a.px - b.px : a.pz - b.pz);
             plotHoles.forEach((h, i) => { h.num = i + 1; });
 
@@ -1713,6 +1734,9 @@ function exportTemplateDXF(maxLength, maxWidth) {
 
         emit('0','ENDSEC','0','EOF');
 
+        updateProgress(98, 'Saving file…');
+        await yield_();
+
         const blob = new Blob([dxf.join('\n')], { type: 'application/dxf' });
         const url  = URL.createObjectURL(blob);
         const a    = document.createElement('a');
@@ -1720,10 +1744,14 @@ function exportTemplateDXF(maxLength, maxWidth) {
         document.body.appendChild(a); a.click();
         document.body.removeChild(a); URL.revokeObjectURL(url);
 
+        updateProgress(100, 'Done.');
+        await yield_();
+
     } catch (e) {
         console.error('[exportTemplateDXF]', e);
         alert(`Template DXF failed: ${e.message}`);
     } finally {
+        hideProgress();
         btn.textContent = orig; btn.disabled = false;
     }
 }
