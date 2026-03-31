@@ -168,13 +168,21 @@ for (const flatPos of f1aGroup) {
 }
 console.log(`Convex hull: ${f1aGroup.length} bars → ${totalHullPts} hull vertices → ${segments.length} edge segments`);
 
-// ── 7. Normalise ──────────────────────────────────────────────────────────────
+// ── 7. Datum (shared with template DXF) ──────────────────────────────────────
+// Use outermost face layer (F1A + N1A) bar centreline endpoints as datum.
+// Matches _cageDatum() in main.js so both DXFs overlay correctly.
+const outerFaceBars = allData.filter(b => b.Avonmouth_Layer_Set && /^[FNTB]1A$/i.test(b.Avonmouth_Layer_Set));
+const datumPxVals = outerFaceBars.flatMap(b => sepAxis === 'x' ? [b.Start_Y, b.End_Y] : [b.Start_X, b.End_X]).filter(v => v != null);
+const datumPzVals = outerFaceBars.flatMap(b => [b.Start_Z, b.End_Z]).filter(v => v != null);
+const datumPx = Math.min(...datumPxVals);
+const datumPz = Math.min(...datumPzVals);
+console.log(`Datum: px=${datumPx.toFixed(0)}, pz=${datumPz.toFixed(0)}`);
+
 const allPx = segments.flatMap(s => [s.x1, s.x2]);
 const allPz = segments.flatMap(s => [s.z1, s.z2]);
-const minPx = Math.min(...allPx), maxPx = Math.max(...allPx);
-const minPz = Math.min(...allPz), maxPz = Math.max(...allPz);
-const drawW = maxPx - minPx, drawH = maxPz - minPz;
-const px = v => v - minPx, pz = v => v - minPz;
+const maxPx = Math.max(...allPx), maxPz = Math.max(...allPz);
+const drawW = maxPx - datumPx, drawH = maxPz - datumPz;
+const px = v => v - datumPx, pz = v => v - datumPz;
 
 console.log(`Drawing extent: ${drawW.toFixed(0)} mm wide × ${drawH.toFixed(0)} mm tall`);
 console.log(`Sample segment [0]: (${px(segments[0].x1).toFixed(1)}, ${pz(segments[0].z1).toFixed(1)}) → (${px(segments[0].x2).toFixed(1)}, ${pz(segments[0].z2).toFixed(1)})`);
