@@ -261,22 +261,45 @@ const holeMedian = hasFN ? median(holes.map(h => h.yMm)) : median(holes.map(h =>
 
 ---
 
-## Template DXF — px Axis Wrong for Y-Running Cages (March 2026)
+## Template DXF — px Axis Wrong for Wall Cages With Faces in X (March 2026)
 
-**Mistake:** `exportTemplateDXF` always computed `px = h.xMm - globalMinX`. For a cage running in Y (cageAxisName='Y', e.g. P7349), all VS/HS couplers on the same face share the same IFC-X value (~1,979,360 for F face). Every hole got `px=0` — the entire plate drew as a single vertical line with all holes stacked on top of each other.
+**Mistake (v1):** `px = h.xMm - globalMinX` always. For P7349 (wall runs in Y, faces in X), every hole on a given face has the same IFC-X ≈ 1,979,360 → all holes get `px=0`. Plate appears as a single vertical line.
 
-**Root cause:** The IFC-X axis is the wall **thickness** direction for a Y-running cage. Hole distribution along the **length** of the wall lives in IFC-Y, not IFC-X.
+**Mistake (v2 — same session):** Fixed with `useLongY = cageAxisName === 'Y' && !useY`. But the parser detects P7349 as `cageAxisName='Z'` (vertical bars dominate the detection ratio — see *Face Sep Axis Detection* lesson below). So the guard never fired.
 
-**Rule:** `px` must follow the cage long axis:
-- `cageAxisName='Y'` wall cage (useY=false) → `px = h.yMm - globalMinY`
-- Slab (useY=true) or `cageAxisName='X'/'Z'` → `px = h.xMm - globalMinX`
+**Root cause:** Both attempts relied on `cageAxisName` to infer which IFC axis represents wall length. `cageAxisName` is unreliable for this — it reflects bar direction dominance, not wall orientation.
+
+**Correct rule:** Derive the face separation axis from face layer geometry (`_detectFaceSepAxis`). If `faceSepAxis='x'` (faces apart in X), then wall length runs in Y → `useLongY=true`. If `faceSepAxis='y'`, length is in X → `useLongY=false`. Slab (`useY=true`) always uses xMm regardless.
 
 ```javascript
-const useLongY = cageAxisName === 'Y' && !useY;
+const faceSepAxis = _detectFaceSepAxis();
+const useLongY = faceSepAxis === 'x' && !useY;
 px: +(useLongY ? h.yMm - globalMinY : h.xMm - globalMinX).toFixed(1)
 ```
 
-**Why `!useY` guard:** For a slab cage, `pz` already uses `yMm` (face plane is X-Y). Using `yMm` for `px` too would collapse both axes onto the same coordinate.
+**Why `!useY` guard:** Slab face plane is X-Y; `pz` already uses `yMm`. Using `yMm` for `px` too would collapse both axes.
+
+---
+
+## Face Sep Axis Detection — Geometry-Based, Not cageAxisName (March 2026)
+
+**Problem:** `_bucketHolesByFace` originally used `cageAxisName === 'Y'` to set `sepAxis='x'`. For P7349 the parser returns `cageAxisName='Z'` (wall's vertical bars dominate the detection), so `sepAxis` defaulted to `'y'` → wrong bucketing (holes spread to inner layers F3A/N3A instead of outer F1A/N1A).
+
+**Root cause:** `cageAxisName` is the axis along which the most unique bar positions exist when looking perpendicular — dominated by vertical bars in a wall cage. It is NOT reliable as a proxy for wall orientation.
+
+**Correct approach:** Compare the **within-layer spread** on each axis across all face layers. Face bars in the same layer are tightly clustered on the separation axis (e.g. all F1A bars share X≈1,979,345 ± 50mm) but spread wide on the length axis (full 10,267mm in Y). The separation axis = axis with the smallest maximum within-layer range.
+
+```javascript
+const maxRange = (key) => Math.max(...layers.map(pts => {
+    const vals = pts.map(p => p[key]).filter(v => v != null).sort((a,b) => a-b);
+    return vals.length >= 2 ? vals[vals.length-1] - vals[0] : 0;
+}));
+return maxRange('x') < maxRange('y') ? 'x' : 'y';
+```
+
+**P7349 result:** xMaxRange ≈ 50mm (all F1A/N1A bars tightly clustered in X within each layer), yMaxRange ≈ 10,267mm (bars spread along wall length). 50 < 10,267 → `sepAxis='x'` ✓
+
+**Why median comparison fails:** Layer Y-medians differ by up to 2,197mm (inner layers have bars at different Y distributions) — more than the 1,304mm X-spread between face layers. Median comparison would incorrectly choose Y.
 
 ---
 
