@@ -63,5 +63,6 @@
 
 - [ ] Test in AutoCAD — confirm bar outlines + holes overlay at correct positions
 - [ ] N1A face orientation check — may need left-right mirror for "outside N1A" view
-- [ ] A4080-EXP-XX-HS-DR series title block / drawing border
+- [x] Drawing border + title block — A0 landscape 1:15, BS 1192 layout, drawing ref A4080-EXP-XX-AF-DR-MA-20{last4}
+- [ ] Title block fields to update once DWG template accessible: project name, originator logo, checked/approved names
 - [ ] Bar diameter labels on BARS hull outlines (optional)

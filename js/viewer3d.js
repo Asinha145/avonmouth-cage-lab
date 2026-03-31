@@ -25,9 +25,13 @@
 class Viewer3D {
     constructor(containerId) {
         this.container   = document.getElementById(containerId);
-        this.scene       = null;
-        this.camera      = null;
-        this.renderer    = null;
+        this.scene        = null;
+        this.camera       = null;   // always points to active camera
+        this._perspCamera = null;
+        this._orthoCamera = null;
+        this._useOrtho    = false;
+        this._datumMarker = null;
+        this.renderer     = null;
         this.ifcapi      = null;
 
         // Map: layer/set string → THREE.Group
@@ -65,8 +69,10 @@ class Viewer3D {
         this.scene = new THREE.Scene();
         this.scene.background = new THREE.Color(0x0d0d1a);
 
-        // Camera
-        this.camera = new THREE.PerspectiveCamera(45, w / h, 0.001, 5000);
+        // Cameras
+        this._perspCamera = new THREE.PerspectiveCamera(45, w / h, 0.001, 5000);
+        this._orthoCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.001, 5000);
+        this.camera = this._perspCamera;
         this._applyOrbit();
 
         // Renderer
@@ -430,27 +436,64 @@ class Viewer3D {
         this._orbit.spherical.theta  = 0.5;
         this._orbit.spherical.phi    = 1.1;
         this._applyOrbit();
+        this._addDatumMarker();
+    }
+
+    _addDatumMarker() {
+        if (this._datumMarker) { this.scene.remove(this._datumMarker); this._datumMarker = null; }
+        const tb = this.totalBrepBbox;
+        if (tb.minX === Infinity) return;
+        // Datum = (min IFC-X face, min IFC-Z bottom, min IFC-Y cage start)
+        // In engine coords: minX, minY, maxZ  (engine-z = -IFC-Y/1000 → min IFC-Y → max engine-z)
+        const r   = this._orbit.spherical.radius;
+        const geo = new THREE.SphereGeometry(r * 0.018, 16, 16);
+        const mat = new THREE.MeshBasicMaterial({ color: 0xff2222, depthTest: false });
+        const sphere = new THREE.Mesh(geo, mat);
+        sphere.position.set(tb.minX, tb.minY, tb.maxZ);
+        sphere.renderOrder = 999;
+        this.scene.add(sphere);
+        this._datumMarker = sphere;
     }
 
     _applyOrbit() {
         const { theta, phi, radius } = this._orbit.spherical;
         const sinPhi = Math.sin(phi), cosPhi = Math.cos(phi);
         const t = this._orbit.target;
-        this.camera.position.set(
-            t.x + radius * sinPhi * Math.sin(theta),
-            t.y + radius * cosPhi,
-            t.z + radius * sinPhi * Math.cos(theta),
-        );
-        this.camera.lookAt(t);
+        const px = t.x + radius * sinPhi * Math.sin(theta);
+        const py = t.y + radius * cosPhi;
+        const pz = t.z + radius * sinPhi * Math.cos(theta);
+
+        this._perspCamera.position.set(px, py, pz);
+        this._perspCamera.lookAt(t);
+
+        // Keep ortho camera synced — frustum sized to match perspective FOV at this radius
+        const fovRad = (this._perspCamera.fov * Math.PI / 180) / 2;
+        const halfH  = radius * Math.tan(fovRad);
+        const halfW  = halfH * this._perspCamera.aspect;
+        this._orthoCamera.left   = -halfW;
+        this._orthoCamera.right  =  halfW;
+        this._orthoCamera.top    =  halfH;
+        this._orthoCamera.bottom = -halfH;
+        this._orthoCamera.position.set(px, py, pz);
+        this._orthoCamera.lookAt(t);
+        this._orthoCamera.updateProjectionMatrix();
+    }
+
+    toggleCameraMode() {
+        this._useOrtho = !this._useOrtho;
+        this.camera = this._useOrtho ? this._orthoCamera : this._perspCamera;
+        this._applyOrbit();
+        return this._useOrtho;
     }
 
     _onResize() {
         const w = this.container.clientWidth;
         const h = this.container.clientHeight;
         if (!w || !h) return;
-        this.camera.aspect = w / h;
-        this.camera.updateProjectionMatrix();
+        this._perspCamera.aspect = w / h;
+        this._perspCamera.updateProjectionMatrix();
         this.renderer.setSize(w, h);
+        this._applyOrbit(); // re-sync ortho frustum for new aspect
     }
 
     // ── Orbit controls ───────────────────────────────────────────────────
