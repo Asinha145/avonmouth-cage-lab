@@ -1640,14 +1640,46 @@ function exportFaceViewDXF(faceLayerName) {
 
     const sepAxis = _detectFaceSepAxis();
 
-    // Project to 2D by dropping the face-normal axis
-    const project = bar => {
-        if (sepAxis === 'x') return { x1: bar.Start_Y, z1: bar.Start_Z, x2: bar.End_Y, z2: bar.End_Z };
-        if (sepAxis === 'y') return { x1: bar.Start_X, z1: bar.Start_Z, x2: bar.End_X, z2: bar.End_Z };
-        /* z */              return { x1: bar.Start_X, z1: bar.Start_Y, x2: bar.End_X, z2: bar.End_Y };
-    };
+    // ── BREP silhouette edges (from Three.js BREP if viewer is loaded) ──
+    // Three.js world space: engine_X=IFC_X/1000, engine_Y=IFC_Z/1000, engine_Z=-IFC_Y/1000
+    // Camera direction (toward viewer, outside the cage) in Three.js space:
+    //   sepAxis='x' → face normal is IFC X → Three.js X → camDir = (-1,0,0)  (F-face at min X)
+    //   sepAxis='y' → face normal is IFC Y → Three.js -Z → camDir = (0,0,+1)
+    //   sepAxis='z' → face normal is IFC Z → Three.js Y → camDir = (0,-1,0)  (T-face at max Y)
+    const camDirMap = { x: {x:-1,y:0,z:0}, y: {x:0,y:0,z:1}, z: {x:0,y:-1,z:0} };
+    const camDir = camDirMap[sepAxis] || {x:-1,y:0,z:0};
 
-    const projected = bars.map(project);
+    let projected;
+    const viewer = window._viewer3d;
+    const brepEdges = viewer ? viewer.getFaceLayerSilhouetteEdges(faceLayerName, camDir) : [];
+
+    if (brepEdges.length > 0) {
+        // Convert Three.js metres → IFC mm, then project to 2D
+        // engine_X=IFC_X/1000 → IFC_X=engine_X*1000
+        // engine_Y=IFC_Z/1000 → IFC_Z=engine_Y*1000
+        // engine_Z=-IFC_Y/1000 → IFC_Y=-engine_Z*1000
+        const toIFC = e => ({
+            x1: e.x1 * 1000, y1: -e.z1 * 1000, z1: e.y1 * 1000,
+            x2: e.x2 * 1000, y2: -e.z2 * 1000, z2: e.y2 * 1000,
+        });
+        const projectEdge = e => {
+            const c = toIFC(e);
+            if (sepAxis === 'x') return { x1: c.y1, z1: c.z1, x2: c.y2, z2: c.z2 };
+            if (sepAxis === 'y') return { x1: c.x1, z1: c.z1, x2: c.x2, z2: c.z2 };
+            /* z */              return { x1: c.x1, z1: c.y1, x2: c.x2, z2: c.y2 };
+        };
+        projected = brepEdges.map(projectEdge);
+        console.log(`[FaceView] BREP mode — ${brepEdges.length} silhouette edges for ${faceLayerName}`);
+    } else {
+        // Fallback: bar centrelines from text-parsed allData
+        const projectBar = bar => {
+            if (sepAxis === 'x') return { x1: bar.Start_Y, z1: bar.Start_Z, x2: bar.End_Y, z2: bar.End_Z };
+            if (sepAxis === 'y') return { x1: bar.Start_X, z1: bar.Start_Z, x2: bar.End_X, z2: bar.End_Z };
+            /* z */              return { x1: bar.Start_X, z1: bar.Start_Y, x2: bar.End_X, z2: bar.End_Y };
+        };
+        projected = bars.map(projectBar);
+        console.log(`[FaceView] Centreline fallback — ${bars.length} bars for ${faceLayerName}`);
+    }
 
     // Normalise to origin
     const allPx = projected.flatMap(p => [p.x1, p.x2]).filter(v => v != null);
@@ -1694,8 +1726,9 @@ function exportFaceViewDXF(faceLayerName) {
         LINE(px(p.x1), pz(p.z1), px(p.x2), pz(p.z2), 'BARS');
     }
 
+    const mode = brepEdges.length > 0 ? 'BREP' : 'centreline';
     TEXT(0, maxPz + 40,
-        `${cageRef}  |  ${faceLayerName}  |  ${bars.length} bars`, 18, 'TEXT');
+        `${cageRef}  |  ${faceLayerName}  |  ${bars.length} bars  [${mode}]`, 18, 'TEXT');
 
     emit('0','ENDSEC','0','EOF');
 
