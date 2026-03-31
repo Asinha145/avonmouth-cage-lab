@@ -204,16 +204,23 @@ No parent chain walk needed. Regex must use `[^,)]*` not `\$` for first arg.
 
 ---
 
-## Bucketing Fix Applied (31 Mar 2026)
+## Bucketing Fix Applied (31 Mar 2026, corrected same day)
 
 `_bucketHolesByFace` was comparing Y to separate F/N faces. For P7349 faces are in X.
-Fixed in `js/main.js` — derives separation axis from `cageAxisName`:
+
+**First attempt (wrong):** Used `cageAxisName === 'Y'` to set sepAxis='x'. This never fired because the parser detects P7349 as `cageAxisName='Z'` (vertical wall bars dominate the axis ratio).
+
+**Correct fix:** `_detectFaceSepAxis()` — compares max within-layer spread on X vs Y. F1A bars are tightly clustered in X (±50mm) but span 10,267mm in Y → xMaxRange (50mm) << yMaxRange (10,267mm) → `sepAxis='x'`. No dependence on `cageAxisName`.
 
 ```javascript
-if (hasTB && !hasFN)           sepAxis = 'z';   // slab
-else if (cageAxisName === 'Y') sepAxis = 'x';   // P7349: wall runs Y → faces in X
-else                           sepAxis = 'y';   // default (wall runs X → faces in Y)
+const maxRange = (key) => Math.max(...layers.map(pts => {
+    const vals = pts.map(p => p[key]).filter(v => v != null).sort((a,b) => a-b);
+    return vals.length >= 2 ? vals[vals.length-1] - vals[0] : 0;
+}));
+return maxRange('x') < maxRange('y') ? 'x' : 'y';
 ```
+
+**useLongY** in `exportTemplateDXF` similarly fixed: `faceSepAxis === 'x' && !useY` (not `cageAxisName === 'Y'`).
 
 ---
 
