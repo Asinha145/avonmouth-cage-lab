@@ -1677,18 +1677,14 @@ function _cageDatum() {
 // by keeping only those with Length above the median for their orientation group —
 // this drops bent end bars, U-bars, and hairpins that don't span the full mesh.
 function _computeLayerDatums() {
-    const faceLayerRe = /^[FN]\d+A$/i;
+    // Includes slab T/B layers in addition to wall F/N layers
+    const faceLayerRe = /^[FNTB]\d+A$/i;
     const layers = [...new Set(
         allData.filter(b => b.Avonmouth_Layer_Set && faceLayerRe.test(b.Avonmouth_Layer_Set))
                .map(b => b.Avonmouth_Layer_Set)
     )];
 
     const sepAxis = _detectFaceSepAxis();
-    const { datumPx, datumPz } = _cageDatum();
-    // px coordinate of a bar centreline — matches _cageDatum axis convention
-    const barPx = b => sepAxis === 'x'
-        ? ((b.Start_Y ?? 0) + (b.End_Y ?? 0)) / 2
-        : ((b.Start_X ?? 0) + (b.End_X ?? 0)) / 2;
 
     // Helper: median of an array
     const median = arr => {
@@ -1698,75 +1694,114 @@ function _computeLayerDatums() {
         return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
     };
 
+    // Helper: IFC axis midpoint of a bar
+    const mid = (b, axis) => {
+        if (axis === 'X') return ((b.Start_X ?? 0) + (b.End_X ?? 0)) / 2;
+        if (axis === 'Y') return ((b.Start_Y ?? 0) + (b.End_Y ?? 0)) / 2;
+        return ((b.Start_Z ?? 0) + (b.End_Z ?? 0)) / 2;
+    };
+
+    // Helper: group bars by stagger cluster; solo bars each get a unique key
+    let _soloIdx = 0;
+    const groupBars = barList => {
+        const map = new Map();
+        for (const b of barList) {
+            const k = b.Stagger_Cluster_ID || `__s${_soloIdx++}`;
+            if (!map.has(k)) map.set(k, []);
+            map.get(k).push(b);
+        }
+        return [...map.values()];
+    };
+
     const results = [];
     for (const layer of layers) {
         const bars = allData.filter(b => b.Avonmouth_Layer_Set === layer);
 
-        const vRaw = bars.filter(b => b.Orientation === 'Vertical');
-        const hRaw = bars.filter(b => b.Orientation === 'Horizontal');
+        // ── Split into two perpendicular grid groups ────────────────────────
+        // vBars: run along "px direction" — their constant IFC axis gives ex or ez.
+        // hBars: run along "pz direction" — their constant IFC axis gives ey or ez.
+        //
+        //  sepAxis='x' (wall, face plane ⊥ IFC-X):
+        //    vBars = Vertical (run in IFC-Z), constant at IFC-Y → contributes ez=-IFC-Y/1000
+        //    hBars = Horizontal (run in IFC-Y), constant at IFC-Z → contributes ey=IFC-Z/1000
+        //    face coord = IFC-X → contributes ex=IFC-X/1000
+        //
+        //  sepAxis='y' (wall, face plane ⊥ IFC-Y):
+        //    vBars = Vertical (run in IFC-Z), constant at IFC-X → contributes ex=IFC-X/1000
+        //    hBars = Horizontal (run in IFC-X), constant at IFC-Z → contributes ey=IFC-Z/1000
+        //    face coord = IFC-Y → contributes ez=-IFC-Y/1000
+        //
+        //  sepAxis='z' (slab, face plane ⊥ IFC-Z):
+        //    vBars = y-running (|Dir_Y|>|Dir_X|), constant at IFC-X → contributes ex=IFC-X/1000
+        //    hBars = x-running (|Dir_X|>|Dir_Y|), constant at IFC-Y → contributes ez=-IFC-Y/1000
+        //    face coord = IFC-Z → contributes ey=IFC-Z/1000
+
+        let vRaw, hRaw, vPosFn, hPosFn;
+        if (sepAxis === 'z') {
+            // Slab: both bar groups are 'Horizontal'; split by dominant Dir_X vs Dir_Y
+            vRaw    = bars.filter(b => Math.abs(b.Dir_Y ?? 0) > Math.abs(b.Dir_X ?? 0));
+            hRaw    = bars.filter(b => Math.abs(b.Dir_X ?? 0) > Math.abs(b.Dir_Y ?? 0));
+            vPosFn  = b => mid(b, 'X');   // y-running bar, constant at IFC-X
+            hPosFn  = b => mid(b, 'Y');   // x-running bar, constant at IFC-Y
+        } else {
+            vRaw    = bars.filter(b => b.Orientation === 'Vertical');
+            hRaw    = bars.filter(b => b.Orientation === 'Horizontal');
+            vPosFn  = b => sepAxis === 'x' ? mid(b, 'Y') : mid(b, 'X');
+            hPosFn  = b => mid(b, 'Z');
+        }
+
         if (!vRaw.length || !hRaw.length) continue;
 
-        // Drop bars shorter than half the median length — removes bent bars / hairpins
-        const vMedian = median(vRaw.map(b => b.Length ?? 0));
-        const hMedian = median(hRaw.map(b => b.Length ?? 0));
-        const vBars = vRaw.filter(b => (b.Length ?? 0) >= vMedian * 0.5);
-        const hBars = hRaw.filter(b => (b.Length ?? 0) >= hMedian * 0.5);
+        // Drop bars shorter than 50% of group median — removes bent bars / hairpins
+        const vMed = median(vRaw.map(b => b.Length ?? 0));
+        const hMed = median(hRaw.map(b => b.Length ?? 0));
+        const vBars = vRaw.filter(b => (b.Length ?? 0) >= vMed * 0.5);
+        const hBars = hRaw.filter(b => (b.Length ?? 0) >= hMed * 0.5);
         if (!vBars.length || !hBars.length) continue;
 
-        // Group by Stagger_Cluster_ID — staggered bars are one logical unit.
-        // Solo bars (no cluster) each get their own unique key.
-        let _soloIdx = 0;
-        const clusterKey = b => b.Stagger_Cluster_ID || `__s${_soloIdx++}`;
-
-        const groupBars = (barList) => {
-            const map = new Map();
-            for (const b of barList) {
-                const k = clusterKey(b);
-                if (!map.has(k)) map.set(k, []);
-                map.get(k).push(b);
-            }
-            return [...map.values()];
-        };
-
-        // For each V cluster: representative px = mean of bar px centrelines
+        // Stagger-cluster representative positions
         const vUnits = groupBars(vBars).map(grp => ({
-            px: grp.reduce((s, b) => s + barPx(b), 0) / grp.length,
+            pos: grp.reduce((s, b) => s + vPosFn(b), 0) / grp.length,
         }));
-
-        // For each H cluster: representative pz = mean of bar Z centrelines
         const hUnits = groupBars(hBars).map(grp => ({
-            pz: grp.reduce((s, b) => s + ((b.Start_Z ?? 0) + (b.End_Z ?? 0)) / 2, 0) / grp.length,
+            pos: grp.reduce((s, b) => s + hPosFn(b), 0) / grp.length,
         }));
 
-        // Nearest V cluster to datum (min px), nearest H cluster (min pz)
-        const nearestV = vUnits.reduce((best, u) => u.px < best.px ? u : best, { px: Infinity });
-        const nearestH = hUnits.reduce((best, u) => u.pz < best.pz ? u : best, { pz: Infinity });
-        if (nearestV.px === Infinity || nearestH.pz === Infinity) continue;
+        // Nearest cluster to datum edge (minimum coordinate)
+        const nearestV = vUnits.reduce((best, u) => u.pos < best.pos ? u : best, { pos: Infinity });
+        const nearestH = hUnits.reduce((best, u) => u.pos < best.pos ? u : best, { pos: Infinity });
+        if (nearestV.pos === Infinity || nearestH.pos === Infinity) continue;
 
-        const vsPx = nearestV.px;   // IFC-Y (sepAxis=x) or IFC-X (sepAxis=y)
-        const hsPz = nearestH.pz;   // IFC-Z always
+        const vsPos = nearestV.pos;
+        const hsPos = nearestH.pos;
 
-        // Face-plane X: mean Start_X of grid bars in this layer (median-filtered set)
-        const gridBars = [...vBars, ...hBars];
-        const xVals = gridBars.flatMap(b => [b.Start_X, b.End_X]).filter(v => v != null);
-        const faceX = xVals.length ? xVals.reduce((s, v) => s + v, 0) / xVals.length : 0;
+        // Face-plane constant coordinate
+        const faceAxisChar = sepAxis === 'x' ? 'X' : sepAxis === 'y' ? 'Y' : 'Z';
+        const faceVals = [...vBars, ...hBars]
+            .flatMap(b => [b[`Start_${faceAxisChar}`], b[`End_${faceAxisChar}`]])
+            .filter(v => v != null);
+        const faceCoord = faceVals.length
+            ? faceVals.reduce((s, v) => s + v, 0) / faceVals.length : 0;
 
-        // engine coords: x=IFC-X/1000, y=IFC-Z/1000, z=-IFC-Y/1000
-        // vsPx is IFC-Y (sepAxis=x) → ez = -vsPx/1000
-        //        or IFC-X (sepAxis=y) → ez = -IFC-Y/1000 but vsPx=IFC-X which doesn't map to ez
-        // For sepAxis=y: the px direction is IFC-X, engine-z=-IFC-Y so the engine Z of the crossing
-        // is determined by the V bar's IFC-Y (which is ≈ constant for a V bar), not its IFC-X.
-        // Use engine-z from actual bar IFC-Y centreline regardless of sepAxis.
-        const nearestVBar = vBars.reduce((best, b) => {
-            const d = Math.abs(barPx(b) - vsPx);
-            return d < best.d ? { b, d } : best;
-        }, { b: null, d: Infinity }).b;
-        const engineZ = nearestVBar
-            ? -((nearestVBar.Start_Y ?? 0) + (nearestVBar.End_Y ?? 0)) / 2 / 1000
-            : -vsPx / 1000;
+        // Engine coordinates: ex=IFC-X/1000, ey=IFC-Z/1000, ez=-IFC-Y/1000
+        let ex, ey, ez;
+        if (sepAxis === 'x') {
+            ex = faceCoord / 1000;   // face at IFC-X
+            ey = hsPos / 1000;       // hsPos = IFC-Z
+            ez = -vsPos / 1000;      // vsPos = IFC-Y → engine-z = -IFC-Y/1000
+        } else if (sepAxis === 'y') {
+            ex = vsPos / 1000;       // vsPos = IFC-X
+            ey = hsPos / 1000;       // hsPos = IFC-Z
+            ez = -faceCoord / 1000;  // face at IFC-Y → engine-z = -IFC-Y/1000
+        } else {
+            // sepAxis='z': slab
+            ex = vsPos / 1000;       // vsPos = IFC-X (y-running bar)
+            ey = faceCoord / 1000;   // face at IFC-Z → engine-y = IFC-Z/1000
+            ez = -hsPos / 1000;      // hsPos = IFC-Y (x-running bar) → engine-z = -IFC-Y/1000
+        }
 
-        console.log(`[layerDatums] ${layer}: vsPx=${Math.round(vsPx)} hsPz=${Math.round(hsPz)} faceX=${Math.round(faceX)} sepAxis=${sepAxis} (${vUnits.length}V/${hUnits.length}H clusters)`);
-        results.push({ layer, ex: faceX / 1000, ey: hsPz / 1000, ez: engineZ });
+        console.log(`[layerDatums] ${layer}: vsPos=${Math.round(vsPos)} hsPos=${Math.round(hsPos)} faceCoord=${Math.round(faceCoord)} sepAxis=${sepAxis} (${vUnits.length}A/${hUnits.length}B clusters)`);
+        results.push({ layer, ex, ey, ez });
     }
     return results;
 }
