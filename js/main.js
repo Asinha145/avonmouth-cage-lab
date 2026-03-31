@@ -1683,7 +1683,12 @@ function _computeLayerDatums() {
                .map(b => b.Avonmouth_Layer_Set)
     )];
 
+    const sepAxis = _detectFaceSepAxis();
     const { datumPx, datumPz } = _cageDatum();
+    // px coordinate of a bar centreline — matches _cageDatum axis convention
+    const barPx = b => sepAxis === 'x'
+        ? ((b.Start_Y ?? 0) + (b.End_Y ?? 0)) / 2
+        : ((b.Start_X ?? 0) + (b.End_X ?? 0)) / 2;
 
     // Helper: median of an array
     const median = arr => {
@@ -1723,31 +1728,45 @@ function _computeLayerDatums() {
             return [...map.values()];
         };
 
-        // For each V cluster: representative Y = mean of bar Y centrelines
+        // For each V cluster: representative px = mean of bar px centrelines
         const vUnits = groupBars(vBars).map(grp => ({
-            y: grp.reduce((s, b) => s + ((b.Start_Y ?? 0) + (b.End_Y ?? 0)) / 2, 0) / grp.length,
+            px: grp.reduce((s, b) => s + barPx(b), 0) / grp.length,
         }));
 
-        // For each H cluster: representative Z = mean of bar Z centrelines
+        // For each H cluster: representative pz = mean of bar Z centrelines
         const hUnits = groupBars(hBars).map(grp => ({
-            z: grp.reduce((s, b) => s + ((b.Start_Z ?? 0) + (b.End_Z ?? 0)) / 2, 0) / grp.length,
+            pz: grp.reduce((s, b) => s + ((b.Start_Z ?? 0) + (b.End_Z ?? 0)) / 2, 0) / grp.length,
         }));
 
-        // Nearest V cluster to datum (min Y), nearest H cluster (min Z)
-        const nearestV = vUnits.reduce((best, u) => u.y < best.y ? u : best, { y: Infinity });
-        const nearestH = hUnits.reduce((best, u) => u.z < best.z ? u : best, { z: Infinity });
-        if (nearestV.y === Infinity || nearestH.z === Infinity) continue;
+        // Nearest V cluster to datum (min px), nearest H cluster (min pz)
+        const nearestV = vUnits.reduce((best, u) => u.px < best.px ? u : best, { px: Infinity });
+        const nearestH = hUnits.reduce((best, u) => u.pz < best.pz ? u : best, { pz: Infinity });
+        if (nearestV.px === Infinity || nearestH.pz === Infinity) continue;
 
-        const vsY = nearestV.y;
-        const hsZ = nearestH.z;
+        const vsPx = nearestV.px;   // IFC-Y (sepAxis=x) or IFC-X (sepAxis=y)
+        const hsPz = nearestH.pz;   // IFC-Z always
 
         // Face-plane X: mean Start_X of grid bars in this layer (median-filtered set)
         const gridBars = [...vBars, ...hBars];
         const xVals = gridBars.flatMap(b => [b.Start_X, b.End_X]).filter(v => v != null);
         const faceX = xVals.length ? xVals.reduce((s, v) => s + v, 0) / xVals.length : 0;
 
-        console.log(`[layerDatums] ${layer}: vsY=${Math.round(vsY)} hsZ=${Math.round(hsZ)} faceX=${Math.round(faceX)} (${vBars.length}V/${hBars.length}H grid bars)`);
-        results.push({ layer, ex: faceX / 1000, ey: hsZ / 1000, ez: -vsY / 1000 });
+        // engine coords: x=IFC-X/1000, y=IFC-Z/1000, z=-IFC-Y/1000
+        // vsPx is IFC-Y (sepAxis=x) → ez = -vsPx/1000
+        //        or IFC-X (sepAxis=y) → ez = -IFC-Y/1000 but vsPx=IFC-X which doesn't map to ez
+        // For sepAxis=y: the px direction is IFC-X, engine-z=-IFC-Y so the engine Z of the crossing
+        // is determined by the V bar's IFC-Y (which is ≈ constant for a V bar), not its IFC-X.
+        // Use engine-z from actual bar IFC-Y centreline regardless of sepAxis.
+        const nearestVBar = vBars.reduce((best, b) => {
+            const d = Math.abs(barPx(b) - vsPx);
+            return d < best.d ? { b, d } : best;
+        }, { b: null, d: Infinity }).b;
+        const engineZ = nearestVBar
+            ? -((nearestVBar.Start_Y ?? 0) + (nearestVBar.End_Y ?? 0)) / 2 / 1000
+            : -vsPx / 1000;
+
+        console.log(`[layerDatums] ${layer}: vsPx=${Math.round(vsPx)} hsPz=${Math.round(hsPz)} faceX=${Math.round(faceX)} sepAxis=${sepAxis} (${vUnits.length}V/${hUnits.length}H clusters)`);
+        results.push({ layer, ex: faceX / 1000, ey: hsPz / 1000, ez: engineZ });
     }
     return results;
 }
