@@ -74,6 +74,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('export-slab-btn').addEventListener('click',   () => exportSlabEDB());
     document.getElementById('export-report-btn').addEventListener('click', () => exportCageReport());
     document.getElementById('export-template-dxf-btn').addEventListener('click', () => exportTemplateDXF(2000, 300).catch(e => console.error(e)));
+    document.getElementById('export-face-dxf-btn').addEventListener('click', () => {
+        const face = document.getElementById('face-view-select')?.value;
+        if (face) exportFaceViewDXF(face);
+    });
     document.getElementById('edb-wall-thickness').addEventListener('input', updateEDBComputedInfo);
 
     document.getElementById('page-prev').addEventListener('click', () => {
@@ -320,6 +324,18 @@ function displayResults(parser) {
 
     const templateDxfBtn = document.getElementById('export-template-dxf-btn');
     if (templateDxfBtn) templateDxfBtn.classList.remove('hidden');
+
+    // Populate face-view dropdown and show section
+    const faceLayers = [...new Set(
+        allData.map(b => b.Avonmouth_Layer_Set).filter(l => l && /^[FNTB]\d+A$/i.test(l))
+    )].sort();
+    const fvSelect  = document.getElementById('face-view-select');
+    const fvSection = document.getElementById('face-view-section');
+    if (fvSelect && faceLayers.length) {
+        fvSelect.innerHTML = faceLayers.map(l => `<option value="${l}">${l}</option>`).join('');
+        if (fvSection) fvSection.classList.remove('hidden');
+    }
+
     autoFillEDBInputs();
     _renderPRLPRCResults(prlPrcResult);
 }
@@ -714,7 +730,9 @@ function renderTable() {
             <td>${bar.Size ? bar.Size + ' mm' : '—'}</td>
             <td>${bar.Length ? Number(bar.Length).toLocaleString() + ' mm' : '—'}</td>
             <td>${bar.Rebar_Mark || '—'}</td>
-            <td>${bar.Bar_Shape || '—'}</td>`;
+            <td>${bar.Bar_Shape_Code
+                ? `<a href="https://kbrebar.co.uk/bs8666-shape-codes/" target="_blank" rel="noopener" title="BS 8666:2020 Shape Code ${bar.Bar_Shape_Code}">${bar.Bar_Shape}</a>`
+                : (bar.Bar_Shape || '—')}</td>`;
         tbody.appendChild(tr);
     });
 
@@ -1604,6 +1622,110 @@ function _bucketHolesByFace(holes) {
         buckets[best].push(hole);
     }
     return Object.fromEntries(Object.entries(buckets).filter(([, h]) => h.length > 0));
+}
+
+function exportFaceViewDXF(faceLayerName) {
+    if (!allData.length) { alert('No cage data loaded.'); return; }
+
+    // Default to first detected face layer
+    if (!faceLayerName) {
+        faceLayerName = allData.map(b => b.Avonmouth_Layer_Set)
+            .find(l => l && /^[FNTB]\d+A$/i.test(l));
+        if (!faceLayerName) { alert('No face layers detected in this cage.'); return; }
+    }
+
+    const sepAxis = _detectFaceSepAxis();
+
+    // Filter bars
+    const vertBars  = allData.filter(b => b.Avonmouth_Layer_Set === faceLayerName && b.Start_X != null);
+    const horizBars = allData.filter(b => /^HS/i.test(b.Avonmouth_Layer_Set || '') && b.Start_X != null);
+
+    if (!vertBars.length && !horizBars.length) {
+        alert(`No bars found for face ${faceLayerName} or HS layers.`); return;
+    }
+
+    // Project bar endpoints to 2D based on face-separation axis
+    const project = bar => {
+        if (sepAxis === 'x') return { x1: bar.Start_Y, z1: bar.Start_Z, x2: bar.End_Y, z2: bar.End_Z };
+        if (sepAxis === 'y') return { x1: bar.Start_X, z1: bar.Start_Z, x2: bar.End_X, z2: bar.End_Z };
+        /* z */              return { x1: bar.Start_X, z1: bar.Start_Y, x2: bar.End_X, z2: bar.End_Y };
+    };
+
+    const allBars = [...vertBars, ...horizBars];
+    const projected = allBars.map(project);
+
+    // Normalise to origin
+    const minPx = Math.min(...projected.flatMap(p => [p.x1, p.x2]).filter(v => v != null));
+    const minPz = Math.min(...projected.flatMap(p => [p.z1, p.z2]).filter(v => v != null));
+
+    const px = v => (v ?? 0) - minPx;
+    const pz = v => (v ?? 0) - minPz;
+
+    const maxPx = Math.max(...projected.flatMap(p => [p.x1, p.x2]).filter(v => v != null)) - minPx;
+    const maxPz = Math.max(...projected.flatMap(p => [p.z1, p.z2]).filter(v => v != null)) - minPz;
+
+    // DXF build
+    const dxf  = [];
+    const emit = (...v) => v.forEach(x => dxf.push(String(x)));
+    const LINE = (x1, z1, x2, z2, lyr) =>
+        emit('0','LINE','8',lyr,
+             '10', x1.toFixed(1), '20', z1.toFixed(1), '30', '0.0',
+             '11', x2.toFixed(1), '21', z2.toFixed(1), '31', '0.0');
+    const TEXT = (x, z, txt, h, lyr) =>
+        emit('0','TEXT','8',lyr,
+             '10', x.toFixed(1), '20', z.toFixed(1), '30', '0.0',
+             '40', h.toFixed(1), '1', String(txt));
+
+    const fileEl  = document.getElementById('ifc-file');
+    const fname   = fileEl?.files[0]?.name || 'CAGE';
+    const cageRef = fname.replace(/\.[^.]+$/, '');
+
+    // HEADER
+    emit('0','SECTION','2','HEADER',
+         '9','$ACADVER','1','AC1009',
+         '9','$INSUNITS','70','4',
+         '0','ENDSEC');
+
+    // TABLES — two named layers
+    emit('0','SECTION','2','TABLES',
+         '0','TABLE','2','LAYER','70','3',
+         '0','LAYER','2','VERT', '70','0','62','2',   // yellow — vertical face bars
+         '0','LAYER','2','HORIZ','70','0','62','5',   // blue   — horizontal HS bars
+         '0','LAYER','2','TEXT', '70','0','62','7',   // white  — labels
+         '0','ENDTAB',
+         '0','ENDSEC');
+
+    // ENTITIES
+    emit('0','SECTION','2','ENTITIES');
+
+    // Vertical face bars — drawn first (behind in layered view)
+    for (let i = 0; i < vertBars.length; i++) {
+        const p = projected[i];
+        if (p.x1 == null || p.z1 == null) continue;
+        LINE(px(p.x1), pz(p.z1), px(p.x2), pz(p.z2), 'VERT');
+    }
+
+    // Horizontal HS bars — drawn second (in front in layered view)
+    for (let i = 0; i < horizBars.length; i++) {
+        const p = projected[vertBars.length + i];
+        if (p.x1 == null || p.z1 == null) continue;
+        LINE(px(p.x1), pz(p.z1), px(p.x2), pz(p.z2), 'HORIZ');
+    }
+
+    // Title label
+    TEXT(0, maxPz + 40,
+        `${cageRef}  |  ${faceLayerName}  |  ${vertBars.length} vert bars  /  ${horizBars.length} HS bars`,
+        18, 'TEXT');
+
+    emit('0','ENDSEC','0','EOF');
+
+    // Download
+    const blob = new Blob([dxf.join('\n')], { type: 'application/octet-stream' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `${cageRef}-${faceLayerName}-view.dxf`;
+    a.click();
+    URL.revokeObjectURL(a.href);
 }
 
 async function exportTemplateDXF(maxLength, maxWidth) {
