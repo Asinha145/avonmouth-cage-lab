@@ -461,7 +461,9 @@
                 <!-- Face View DXF -->
                 <div class="edb-section hidden" id="face-view-section">
                     <h4>Face View DXF</h4>
-                    <p class="edb-note">Orthographic face view from outside — selected face layer only. Opens in AutoCAD at true mm scale.</p>
+                    <p class="edb-note">Site template: face bar outlines + coupler plate holes overlaid, one section per face. Real mm coordinates, Scale 1:15.</p>
+                    <button id="export-combined-dxf-btn" class="btn-secondary btn-edb" disabled title="Waiting for 3D geometry to load…">📐 Site Template DXF</button>
+                    <p class="edb-note" style="margin-top:8px;font-size:0.85em;color:#888">Single face debug view:</p>
                     <div class="edb-inputs">
                         <label>Face
                             <select id="face-view-select"></select>
