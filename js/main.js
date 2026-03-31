@@ -1701,32 +1701,47 @@ function _computeLayerDatums() {
         const hRaw = bars.filter(b => b.Orientation === 'Horizontal');
         if (!vRaw.length || !hRaw.length) continue;
 
-        // Drop bars shorter than half the median length for their group —
-        // removes bent bars / hairpins / end bars that aren't part of the regular grid
+        // Drop bars shorter than half the median length — removes bent bars / hairpins
         const vMedian = median(vRaw.map(b => b.Length ?? 0));
         const hMedian = median(hRaw.map(b => b.Length ?? 0));
         const vBars = vRaw.filter(b => (b.Length ?? 0) >= vMedian * 0.5);
         const hBars = hRaw.filter(b => (b.Length ?? 0) >= hMedian * 0.5);
         if (!vBars.length || !hBars.length) continue;
 
-        // Nearest VS bar = min Y centreline (closest to datum start along wall)
-        const nearestV = vBars.reduce((best, b) => {
-            const y = ((b.Start_Y ?? 0) + (b.End_Y ?? 0)) / 2;
-            return y < best.y ? { b, y } : best;
-        }, { b: null, y: Infinity });
+        // Group by Stagger_Cluster_ID — staggered bars are one logical unit.
+        // Solo bars (no cluster) each get their own unique key.
+        let _soloIdx = 0;
+        const clusterKey = b => b.Stagger_Cluster_ID || `__s${_soloIdx++}`;
 
-        // Nearest HS bar = min Z centreline (closest to datum at bottom)
-        const nearestH = hBars.reduce((best, b) => {
-            const z = ((b.Start_Z ?? 0) + (b.End_Z ?? 0)) / 2;
-            return z < best.z ? { b, z } : best;
-        }, { b: null, z: Infinity });
+        const groupBars = (barList) => {
+            const map = new Map();
+            for (const b of barList) {
+                const k = clusterKey(b);
+                if (!map.has(k)) map.set(k, []);
+                map.get(k).push(b);
+            }
+            return [...map.values()];
+        };
 
-        if (!nearestV.b || !nearestH.b) continue;
+        // For each V cluster: representative Y = mean of bar Y centrelines
+        const vUnits = groupBars(vBars).map(grp => ({
+            y: grp.reduce((s, b) => s + ((b.Start_Y ?? 0) + (b.End_Y ?? 0)) / 2, 0) / grp.length,
+        }));
+
+        // For each H cluster: representative Z = mean of bar Z centrelines
+        const hUnits = groupBars(hBars).map(grp => ({
+            z: grp.reduce((s, b) => s + ((b.Start_Z ?? 0) + (b.End_Z ?? 0)) / 2, 0) / grp.length,
+        }));
+
+        // Nearest V cluster to datum (min Y), nearest H cluster (min Z)
+        const nearestV = vUnits.reduce((best, u) => u.y < best.y ? u : best, { y: Infinity });
+        const nearestH = hUnits.reduce((best, u) => u.z < best.z ? u : best, { z: Infinity });
+        if (nearestV.y === Infinity || nearestH.z === Infinity) continue;
 
         const vsY = nearestV.y;
         const hsZ = nearestH.z;
 
-        // Face-plane X: mean Start_X of grid bars in this layer
+        // Face-plane X: mean Start_X of grid bars in this layer (median-filtered set)
         const gridBars = [...vBars, ...hBars];
         const xVals = gridBars.flatMap(b => [b.Start_X, b.End_X]).filter(v => v != null);
         const faceX = xVals.length ? xVals.reduce((s, v) => s + v, 0) / xVals.length : 0;
