@@ -106,10 +106,17 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     // ViewCube buttons
-    document.querySelectorAll('.viewcube-btn').forEach(btn => {
+    document.querySelectorAll('.viewcube-btn[data-view]').forEach(btn => {
         btn.addEventListener('click', () => {
             if (window._viewer3d) window._viewer3d.setView(btn.dataset.view);
         });
+    });
+
+    document.getElementById('camera-mode-btn').addEventListener('click', function() {
+        if (!window._viewer3d) return;
+        const isOrtho = window._viewer3d.toggleCameraMode();
+        this.textContent = isOrtho ? 'Ortho' : 'Persp';
+        this.title = isOrtho ? 'Switch to perspective' : 'Switch to orthographic';
     });
 
     // Initialise web-ifc Viewer3D (loads WASM once, re-used per file)
@@ -1888,12 +1895,13 @@ async function exportCombinedFaceDXF() {
              '0','TABLE','2','LTYPE','70','1',
              '0','LTYPE','2','CONTINUOUS','70','0','3','Solid line','72','65','73','0','40','0.0',
              '0','ENDTAB',
-             '0','TABLE','2','LAYER','70','5',
+             '0','TABLE','2','LAYER','70','6',
              '0','LAYER','2','BARS',         '70','0','62','3','6','CONTINUOUS',
              '0','LAYER','2','HOLES',        '70','0','62','1','6','CONTINUOUS',
              '0','LAYER','2','PLATE_OUTLINE','70','0','62','5','6','CONTINUOUS',
              '0','LAYER','2','DIMS',         '70','0','62','8','6','CONTINUOUS',
              '0','LAYER','2','TEXT',         '70','0','62','7','6','CONTINUOUS',
+             '0','LAYER','2','TITLE_BLOCK',  '70','0','62','7','6','CONTINUOUS',
              '0','ENDTAB',
              '0','ENDSEC');
         emit('0','SECTION','2','BLOCKS','0','ENDSEC');
@@ -1903,6 +1911,7 @@ async function exportCombinedFaceDXF() {
         const HEADER_H   = 60;   // mm reserved above each section for title text
         const SECTION_GAP = 600; // mm gap between sections
         let baseZ = DIM_BELOW;   // first section face content starts here
+        let contentMaxX = 0, contentMaxZ = 0; // track content extents (reserved for future auto-scale)
 
         for (const [faceName, faceHoles] of Object.entries(faceBuckets)) {
             // ── BREP bar hull outlines ────────────────────────────────────────
@@ -1982,9 +1991,147 @@ async function exportCombinedFaceDXF() {
                 `Datum: bottom-left of outer face bars (IFC mm)  |  Hole dia = coupler OD + 2 mm tolerance`,
                 8, 'TEXT');
 
+            // Track content bounding box
+            contentMaxX = Math.max(contentMaxX, maxFacePx);
+            contentMaxZ = baseZ + maxFacePz + HEADER_H;
+
             // Advance baseZ for next section
             baseZ += maxFacePz + HEADER_H + SECTION_GAP + DIM_BELOW;
         }
+
+        // ── Drawing border + title block (A0 landscape, 1:15) ────────────────
+        // ── A4080 title block — geometry from A4080-EXP-XX-HS-DR-MA-200000 template ──
+        // Template is A0 landscape (1189×841mm), title block 100mm tall at bottom, full width.
+        // All template coords in paper mm. Scale S=15 maps paper mm → model-space mm.
+        const S = 15;
+        // Position paper so content (starting at ~0,DIM_BELOW) sits above the title block.
+        // Drawing area bottom in model space = OY + 100*S; set that ~200mm below content origin.
+        const OX = -(5*S + 300);       // inner border left (X=5 paper) aligns ~300mm left of content
+        const OY = -(100*S + 200);     // title block top (Y=100 paper) is 200mm below content origin
+
+        const TBL = 'TITLE_BLOCK';
+        const Tx = x => OX + x * S;
+        const Ty = y => OY + y * S;
+        const TL  = (x0,y0,x1,y1) => LINE(Tx(x0),Ty(y0),Tx(x1),Ty(y1),TBL);
+        const TT  = (x,y,txt,h)   => TEXT(Tx(x),Ty(y),txt,h*S,TBL);
+
+        // Outer paper border (A0 landscape 1189×841mm)
+        TL(0,0,1189,0); TL(1189,0,1189,841); TL(1189,841,0,841); TL(0,841,0,0);
+        // Inner drawing border — top/left/right only; bottom = top of title block at Y=100
+        TL(5,100,5,836); TL(5,836,1184,836); TL(1184,836,1184,100);
+        // Bottom of drawing area / top of title block
+        TL(5,100,1184,100);
+
+        // ── Title block outer box (Y=0 to 100, X=5 to 1184) ─────────────────
+        TL(5,0,1184,0);   // bottom
+        TL(5,0,5,100);    // left
+        TL(1184,0,1184,100); // right
+        // (top already drawn above as bottom of drawing area)
+
+        // Column dividers (full height)
+        TL(294, 0, 294, 100);   // general notes | revision table
+        TL(459, 0, 459, 100);   // revision table | logo cell 1
+        TL(624, 0, 624, 100);   // logo cell 1 | address cell
+        TL(789, 0, 789, 100);   // address | project+title cells
+        TL(954, 0, 954, 100);   // project+title | metadata panel
+
+        // Project / Drawing title cell horizontal divider (Y=50)
+        TL(789, 50, 954, 50);
+
+        // Metadata panel (X=954–1184) — horizontal dividers at Y=25, 50, 75
+        TL(954, 25, 1184, 25);
+        TL(954, 50, 1184, 50);
+        TL(954, 75, 1184, 75);
+
+        // Drawing Number row (Y=0–25): DWG NO | REV at X=1151
+        TL(1151, 0, 1151, 25);
+
+        // DO NOT SCALE row (Y=25–50): text | Sheet Number at X=1108
+        TL(1108, 25, 1108, 50);
+
+        // Client Project No / Scale / Sheet Size row (Y=50–75)
+        TL(1031, 50, 1031, 75);
+        TL(1108, 50, 1108, 75);
+
+        // Purpose of Issue / Status row (Y=75–100)
+        TL(1108, 75, 1108, 100);
+
+        // Revision table sub-row headers (Y=0–11)
+        TL(294, 11, 459, 11);
+        TL(311, 0,  311, 11);   // Rev | Comment
+        TL(410, 0,  410, 11);   // Comment | Date
+        TL(442, 0,  442, 11);   // Date | Chkd
+
+        // ── Field labels (heights in paper mm to be scaled) ──────────────────
+        const LH = 4.775;   // label text height (paper mm)
+        const VH = 6.686;   // value text height
+        const VHL = 7.163;  // large value text height
+        const VHD = 5.730;  // drawing number text height
+
+        // Right metadata panel labels
+        TT(956,  84,    'Purpose of issue:', LH);
+        TT(1110, 84,    'Status:', LH);
+        TT(956,  59,    'Client Project Number:', LH);
+        TT(1033, 59,    'Scale:', LH);
+        TT(1110, 59,    'Drawing Sheet Size:', LH);
+        TT(968,  39.75, 'DO NOT SCALE FROM THIS', VH);
+        TT(1007, 31,    'DRAWING', VH);
+        TT(1109, 34,    'Sheet Number:', LH);
+        TT(956,  9,     'Drawing Number:', LH);
+        TT(1153, 9,     'Rev.:', LH);
+
+        // Project / Drawing title labels
+        TT(791, 84, 'Project:', LH);
+        TT(791, 34, 'Drawing:', LH);
+
+        // Revision table column headers
+        TT(295, 3, 'Rev.',    LH);
+        TT(313, 3, 'Comment', LH);
+        TT(412, 3, 'Date',    LH);
+        TT(443, 3, 'Chkd',   LH);
+
+        // Registered office address (X=624–789)
+        TT(627, 36,    'Registered Head Office:', LH);
+        TT(627, 28,    'Bridge Place 1 & 2, Anchor Boulevard,', LH);
+        TT(627, 21.75, 'Crossways,', LH);
+        TT(627, 15.5,  'Dartford, Kent,', LH);
+        TT(627, 9.25,  'DA2 6SN', LH);
+        TT(627, 3,     'Tel: +44 (0)1322 296 200', LH);
+
+        // General Notes (X=5–294)
+        TT(10, 87,    'GENERAL NOTES:', LH);
+        TT(10, 80.75, '1. ALL DIMENSIONS ARE IN MILLIMETRES (mm).', LH);
+        TT(10, 74.5,  '2. ALL LEVELS ARE IN METRES (m).', LH);
+        TT(10, 68.25, '3. THIS DRAWING IS TO BE READ IN CONJUNCTION WITH ALL RELEVANT', LH);
+        TT(10, 62,    'DRAWINGS. ANY DISCREPANCIES ARE TO BE BROUGHT TO THE', LH);
+        TT(10, 55.75, 'ATTENTION OF THE RELEVANT ENGINEER.', LH);
+        TT(10, 49.5,  '4. ALL DIMENSIONS ARE TO BE CHECKED PRIOR TO', LH);
+        TT(10, 43.25, 'COMMENCEMENT OF WORK ON SITE.', LH);
+        TT(10, 37,    '5. ALL REINFORCEMENT SHALL BE WELDABLE', LH);
+        TT(10, 30.75, 'GRADE B500C TO BS4449 (AS REQUIRED BY BTS', LH);
+        TT(10, 24.5,  '1.11 (1) ). THE CARBON EQUIVALENT VALUE (Cev)', LH);
+        TT(10, 18.25, 'OF THE REINFORCEMENT SHALL NOT EXCEED', LH);
+        TT(10, 12,    'THE VALUES STATED ON THE APPLICABLE', LH);
+
+        // ── Field values ──────────────────────────────────────────────────────
+        const last4  = (cageRef.match(/\d+/) || ['0000'])[0].slice(-4).padStart(4,'0');
+        const drawRef = `A4080-EXP-XX-AF-DR-MA-20${last4}`;
+        const today   = new Date().toISOString().slice(0,10).replace(/-/g,'/');
+
+        // Project name
+        TT(801, 72.75, 'AVONMOUTH MANUFACTURING', VH);
+        TT(853, 64,    'FACILITY', VH);
+        // Drawing title
+        TT(801, 43, cageRef, VH);
+        TT(801, 25, 'COUPLER PLATE SITE TEMPLATE', VH);
+        // Metadata values
+        TT(956,  7,  drawRef, VHD);   // Drawing Number
+        TT(1153, 7,  'P01',   LH);    // Rev
+        TT(957,  57, 'A4080', VHL);   // Client Project Number
+        TT(1042, 57, '1:15',  VHL);   // Scale
+        TT(1140, 57, 'A0',    VHL);   // Sheet Size
+        TT(957,  82, 'ISSUED FOR INFORMATION', LH);  // Purpose of Issue (pending update)
+        TT(1110, 82, 'S4',    LH);    // Status (pending update)
 
         emit('0','ENDSEC','0','EOF');
 
@@ -1992,7 +2139,7 @@ async function exportCombinedFaceDXF() {
         const blob = new Blob([content], { type: 'application/octet-stream' });
         const a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
-        a.download = `${cageRef}-site-template.dxf`;
+        a.download = `A4080-EXP-XX-AF-DR-MA-20${last4}.dxf`;
         document.body.appendChild(a); a.click();
         document.body.removeChild(a); URL.revokeObjectURL(a.href);
 
