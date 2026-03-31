@@ -5,7 +5,7 @@ Update this file as each item is ported. Last v2 commit: `30ac9d4` (27 Mar 2026)
 
 ---
 
-## 1. VS/HS Count Fix — viewer shows bar count only ✅ DONE (31 Mar 2026)
+## 1. VS/HS Count Fix — viewer shows bar count only ✅ PORTED TO V2 (31 Mar 2026, commit `cee6800`)
 **File:** `js/main.js` → `_buildViewerCheckboxes`
 **Change:** For VS/HS layers, show rebar count only (not rebar + coupler). Coupler is 1:1 with bar — showing both doubled the count. RF35 VS was showing 120, now 60.
 ```javascript
