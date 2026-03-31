@@ -110,17 +110,41 @@ See `docs/template-dxf.md` for full specification.
 | Edge clearance | 25mm from nearest hole edge to plate edge |
 | VS plate orientation | Long = Z (height) for wall cages, auto-detect |
 | HS plate orientation | Long = px (cage length), hardcoded |
-| px axis | `yMm − globalMinY` when `faceSepAxis='x'` (wall faces in X); `xMm − globalMinX` otherwise |
-| pz axis | `zMm − minFaceZ` for wall; `yMm − minFaceY` for slab |
+| px axis | `yMm − datumPx` via `_cageDatum()` (was `globalMinY`) |
+| pz axis | `zMm − datumPz` via `_cageDatum()` (was per-face `minP`) |
 | Face sep axis | From `_detectFaceSepAxis()` — geometry-based, not `cageAxisName` |
+
+**Datum fix (commit b9b0362):** `globalMinY` and per-face `minP` replaced with `_cageDatum()` so template and face view share the same coordinate origin.
 
 **Verified output — P7349:** F1A=74 holes (25 VS + 49 HS, 8 plates), N1A=88 holes (5 HS plates, ~20 holes = 10+10 parallel rows, ~1850×217mm).
 
 ---
 
-## 7. Active Lab Workstreams (outputs not yet finalised)
+## 7. Site Template DXF ✅ COMPLETE (31 Mar 2026)
 
-### 7.1 Coupler Geometry — Outside-Zone Detection
+See `docs/site-template-dxf.md` for full specification.
+
+Combined orthographic face elevation + coupler plate template for site use.
+
+| Field | Value |
+|---|---|
+| Format | AC1009 (AutoCAD R12), real mm coordinates |
+| Scale | 1:15 stated in title block — set plot scale in AutoCAD |
+| Faces | One section per face with VS/HS holes — F1A + N1A for P7349 |
+| BARS layer | BREP convex hull bar outlines (green, colour 3) |
+| HOLES layer | Coupler hole circles at face coords (red, colour 1) |
+| PLATE_OUTLINE | Plate rectangles from `_computePlates()` at face coords (blue, colour 5) |
+| DIMS layer | Overall span + per-hole tick marks (grey, colour 8) |
+| Datum | `_cageDatum()` — shared across BARS and HOLES, exact overlay |
+| Paper size | A1 landscape at 1:15 (688mm wide × ~700mm tall for two sections) |
+
+**Verified — P7349:** F1A 72 bars + 74 holes, N1A 71 bars + 88 holes. Datum px=6,237,394 pz=12,864. VS hole px=5,202 pz=1,700 within bounds ✓
+
+---
+
+## 8. Active Lab Workstreams (outputs not yet finalised)
+
+### 8.1 Coupler Geometry — Outside-Zone Detection
 **Target output:** Correct `outside` flag on each bar using both endpoints.
 ```javascript
 // To implement in zone classification
@@ -131,7 +155,7 @@ const outside = minY < N1A_ABS_MIN || maxY > F1A_ABS_MAX;
 **Affected output:** Zone report, bar outside-zone count (currently 25 detected, 34 actual).
 **Do not merge back to cage-v2 until the 9 through-bars are correctly classified.**
 
-### 7.2 EDB Template Making
+### 8.2 EDB Template Making
 **Target:** New or revised EDB template file(s) in `templates/` (local only — gitignored).
 Any JS-side changes that support the new template → must be spec'd here before implementation.
 Template structure changes must not alter existing cell references for H36–Z36 without a spec update.
