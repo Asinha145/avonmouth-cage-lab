@@ -1707,16 +1707,29 @@ function exportFaceViewDXF(faceLayerName) {
     const fname   = fileEl?.files[0]?.name || 'CAGE';
     const cageRef = fname.replace(/\.[^.]+$/, '');
 
-    emit('0','SECTION','2','HEADER',
-         '9','$ACADVER','1','AC1009',
-         '9','$INSUNITS','70','4',
+    emit('0','SECTION',
+         '2','HEADER',
+         '9','$ACADVER',
+         '1','AC1009',
+         '9','$INSUNITS',
+         '70','4',
          '0','ENDSEC');
 
-    emit('0','SECTION','2','TABLES',
-         '0','TABLE','2','LAYER','70','2',
-         '0','LAYER','2','BARS','70','0','62','2',   // yellow — face bars
-         '0','LAYER','2','TEXT','70','0','62','7',   // white  — label
+    // TABLES: LTYPE must come before LAYER in AC1009
+    emit('0','SECTION',
+         '2','TABLES',
+         '0','TABLE','2','LTYPE','70','1',
+         '0','LTYPE','2','CONTINUOUS','70','0','3','Solid line','72','65','73','0','40','0.0',
          '0','ENDTAB',
+         '0','TABLE','2','LAYER','70','2',
+         '0','LAYER','2','BARS','70','0','62','2','6','CONTINUOUS',
+         '0','LAYER','2','TEXT','70','0','62','7','6','CONTINUOUS',
+         '0','ENDTAB',
+         '0','ENDSEC');
+
+    // BLOCKS section required by AC1009 (may be empty)
+    emit('0','SECTION',
+         '2','BLOCKS',
          '0','ENDSEC');
 
     emit('0','SECTION','2','ENTITIES');
@@ -1732,7 +1745,7 @@ function exportFaceViewDXF(faceLayerName) {
 
     emit('0','ENDSEC','0','EOF');
 
-    const blob = new Blob([dxf.join('\n')], { type: 'application/octet-stream' });
+    const blob = new Blob([dxf.join('\r\n') + '\r\n'], { type: 'application/octet-stream' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = `${cageRef}-${faceLayerName}-view.dxf`;
