@@ -516,6 +516,88 @@ class Viewer3D {
     _finaliseOrbit() {
         if (this._attachOrbit) { this._attachOrbit(); this._attachOrbit = null; }
     }
+
+    // ── Silhouette edge extraction for face view DXF ─────────────────────
+    /**
+     * Returns the silhouette edges of a layer's BREP geometry as seen from
+     * a given camera direction (orthographic, perpendicular to the face plane).
+     *
+     * Coordinate system: Three.js world space, metres, Y-up.
+     *   engine_X = IFC_X / 1000
+     *   engine_Y = IFC_Z / 1000   (height)
+     *   engine_Z = -IFC_Y / 1000
+     *
+     * @param {string} layerName  e.g. 'F1A'
+     * @param {{x,y,z}} camDir   unit vector toward camera (Three.js world space)
+     * @returns {Array<{x1,y1,z1,x2,y2,z2}>} edges in Three.js metres
+     */
+    getFaceLayerSilhouetteEdges(layerName, camDir) {
+        const group = this.layerGroups.get(layerName);
+        if (!group) return [];
+
+        const cam = new THREE.Vector3(camDir.x, camDir.y, camDir.z).normalize();
+        const result = [];
+
+        group.traverse(obj => {
+            if (!obj.isMesh) return;
+            const geo = obj.geometry;
+            const pos = geo.attributes.position;
+            if (!pos) return;
+            const idx = geo.index;
+            const mw  = obj.matrixWorld;
+
+            // Build world-space vertex array
+            const verts = [];
+            for (let i = 0; i < pos.count; i++) {
+                const v = new THREE.Vector3(pos.getX(i), pos.getY(i), pos.getZ(i));
+                v.applyMatrix4(mw);
+                verts.push(v);
+            }
+
+            const triCount = idx ? idx.count / 3 : Math.floor(pos.count / 3);
+            const vi = (t, c) => idx ? idx.getX(t * 3 + c) : t * 3 + c;
+
+            // Triangle face normal
+            const faceNormal = t => {
+                const v0 = verts[vi(t, 0)], v1 = verts[vi(t, 1)], v2 = verts[vi(t, 2)];
+                return new THREE.Vector3()
+                    .crossVectors(
+                        new THREE.Vector3().subVectors(v1, v0),
+                        new THREE.Vector3().subVectors(v2, v0)
+                    ).normalize();
+            };
+
+            // Build edge → triangle list
+            const edgeMap = new Map();
+            for (let t = 0; t < triCount; t++) {
+                const i0 = vi(t, 0), i1 = vi(t, 1), i2 = vi(t, 2);
+                for (const [a, b] of [[i0, i1], [i1, i2], [i2, i0]]) {
+                    const key = Math.min(a, b) + '_' + Math.max(a, b);
+                    if (!edgeMap.has(key)) edgeMap.set(key, { a: Math.min(a,b), b: Math.max(a,b), tris: [] });
+                    edgeMap.get(key).tris.push(t);
+                }
+            }
+
+            // Emit silhouette edges: where sign of dot(faceNormal, camDir) differs
+            for (const { a, b, tris } of edgeMap.values()) {
+                let isSilhouette = false;
+                if (tris.length === 1) {
+                    // Open/boundary edge — always visible
+                    isSilhouette = true;
+                } else if (tris.length === 2) {
+                    const d0 = faceNormal(tris[0]).dot(cam);
+                    const d1 = faceNormal(tris[1]).dot(cam);
+                    isSilhouette = d0 * d1 < 0;
+                }
+                if (isSilhouette) {
+                    const va = verts[a], vb = verts[b];
+                    result.push({ x1: va.x, y1: va.y, z1: va.z, x2: vb.x, y2: vb.y, z2: vb.z });
+                }
+            }
+        });
+
+        return result;
+    }
 }
 
 // Monkey-patch init to call _finaliseOrbit after renderer is created
