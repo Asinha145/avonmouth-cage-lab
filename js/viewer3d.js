@@ -30,8 +30,9 @@ class Viewer3D {
         this._perspCamera = null;
         this._orthoCamera = null;
         this._useOrtho    = false;
-        this._datumMarker = null;
-        this.renderer     = null;
+        this._datumMarker       = null;
+        this._layerDatumMarkers = [];
+        this.renderer           = null;
         this.ifcapi      = null;
 
         // Map: layer/set string → THREE.Group
@@ -445,9 +446,7 @@ class Viewer3D {
         if (tb.minX === Infinity) return;
         // Datum = (min IFC-X face, min IFC-Z bottom, min IFC-Y cage start)
         // In engine coords: minX, minY, maxZ  (engine-z = -IFC-Y/1000 → min IFC-Y → max engine-z)
-        const box = new THREE.Box3();
-        this.scene.traverse(o => { if (o.isMesh && o !== this._datumMarker) box.expandByObject(o); });
-        const size = box.isEmpty() ? 1 : box.getSize(new THREE.Vector3()).length();
+        const size = this._sceneSize();
         const geo = new THREE.SphereGeometry(size * 0.004, 12, 12);
         const mat = new THREE.MeshBasicMaterial({ color: 0xff2222, depthTest: false });
         const sphere = new THREE.Mesh(geo, mat);
@@ -455,6 +454,39 @@ class Viewer3D {
         sphere.renderOrder = 999;
         this.scene.add(sphere);
         this._datumMarker = sphere;
+    }
+
+    // Returns diagonal length of scene bounding box (excludes datum markers themselves)
+    _sceneSize() {
+        const box = new THREE.Box3();
+        this.scene.traverse(o => {
+            if (o.isMesh && o !== this._datumMarker && !(this._layerDatumMarkers || []).includes(o))
+                box.expandByObject(o);
+        });
+        return box.isEmpty() ? 1 : box.getSize(new THREE.Vector3()).length();
+    }
+
+    // Place orange dot at each layer VS/HS intersection.
+    // markers: [{ layer, ex, ey, ez }] — engine coords (metres) from _computeLayerDatums()
+    setLayerDatumMarkers(markers) {
+        for (const m of this._layerDatumMarkers || []) this.scene.remove(m);
+        this._layerDatumMarkers = [];
+        if (!markers.length) return;
+
+        const r   = this._sceneSize() * 0.004;
+        const geo = new THREE.SphereGeometry(r, 12, 12);
+        const mat = new THREE.MeshBasicMaterial({ color: 0xff8c00, depthTest: false }); // orange
+
+        for (const { layer, ex, ey, ez } of markers) {
+            const sphere = new THREE.Mesh(geo, mat);
+            sphere.position.set(ex, ey, ez);
+            sphere.renderOrder = 999;
+            sphere.userData.layer = layer;
+            this.scene.add(sphere);
+            this._layerDatumMarkers.push(sphere);
+        }
+        console.log(`[Viewer3D] ${markers.length} layer datum markers placed:`,
+            markers.map(m => m.layer).join(', '));
     }
 
     _applyOrbit() {

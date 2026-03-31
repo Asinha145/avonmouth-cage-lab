@@ -197,6 +197,7 @@ async function processFile() {
                     const dims = await window._viewer3d.loadIFC(arrayBuffer, barMap, cageAxisName, _couplerMap);
                     if (dims) _updateDimBoxesFromBREP(dims);
                     _buildViewerCheckboxes();
+                    window._viewer3d.setLayerDatumMarkers(_computeLayerDatums());
                     // Enable face view DXF buttons now that BREP geometry is loaded
                     const faceBtn = document.getElementById('export-face-dxf-btn');
                     if (faceBtn) { faceBtn.disabled = false; faceBtn.title = ''; }
@@ -1664,6 +1665,56 @@ function _cageDatum() {
         datumPx: Math.min(...pxVals),
         datumPz: Math.min(...pzVals),
     };
+}
+
+// Compute the nearest VS/HS bar intersection per face mesh layer (F1A, F3A, N1A, N3A …).
+// Returns array of { layer, ex, ey, ez } in Three.js engine coordinates (metres).
+// engine-x = IFC-X/1000, engine-y = IFC-Z/1000, engine-z = -IFC-Y/1000
+function _computeLayerDatums() {
+    const faceLayerRe = /^[FN]\d+A$/i;
+    const layers = [...new Set(
+        allData.filter(b => b.Avonmouth_Layer_Set && faceLayerRe.test(b.Avonmouth_Layer_Set))
+               .map(b => b.Avonmouth_Layer_Set)
+    )];
+
+    const results = [];
+    for (const layer of layers) {
+        const bars = allData.filter(b => b.Avonmouth_Layer_Set === layer);
+
+        // Split by orientation (already computed by parser)
+        const vBars = bars.filter(b => b.Orientation === 'Vertical');
+        const hBars = bars.filter(b => b.Orientation === 'Horizontal');
+        if (!vBars.length || !hBars.length) continue;
+
+        // Nearest vertical bar = smallest min(Start_Y, End_Y) — leftmost in face view
+        const nearestV = vBars.reduce((best, b) => {
+            const y = Math.min(b.Start_Y ?? Infinity, b.End_Y ?? Infinity);
+            return y < best.y ? { b, y } : best;
+        }, { b: null, y: Infinity }).b;
+
+        // Nearest horizontal bar = smallest min(Start_Z, End_Z) — bottommost in face view
+        const nearestH = hBars.reduce((best, b) => {
+            const z = Math.min(b.Start_Z ?? Infinity, b.End_Z ?? Infinity);
+            return z < best.z ? { b, z } : best;
+        }, { b: null, z: Infinity }).b;
+
+        if (!nearestV || !nearestH) continue;
+
+        // Intersection IFC coordinates
+        const vsY  = ((nearestV.Start_Y ?? 0) + (nearestV.End_Y ?? 0)) / 2;  // V bar centreline Y
+        const hsZ  = ((nearestH.Start_Z ?? 0) + (nearestH.End_Z ?? 0)) / 2;  // H bar centreline Z
+        // Face-plane X: mean Start_X of all bars in this layer
+        const xVals = bars.flatMap(b => [b.Start_X, b.End_X]).filter(v => v != null);
+        const faceX = xVals.length ? xVals.reduce((s, v) => s + v, 0) / xVals.length : 0;
+
+        results.push({
+            layer,
+            ex:  faceX / 1000,
+            ey:  hsZ   / 1000,
+            ez: -vsY   / 1000,
+        });
+    }
+    return results;
 }
 
 function exportFaceViewDXF(faceLayerName) {
