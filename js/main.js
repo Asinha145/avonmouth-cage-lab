@@ -78,6 +78,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         const face = document.getElementById('face-view-select')?.value;
         if (face) exportFaceViewDXF(face);
     });
+    document.getElementById('export-combined-dxf-btn').addEventListener('click', () => {
+        exportCombinedFaceDXF().catch(e => console.error('[combinedDXF]', e));
+    });
     document.getElementById('edb-wall-thickness').addEventListener('input', updateEDBComputedInfo);
 
     document.getElementById('page-prev').addEventListener('click', () => {
@@ -187,9 +190,11 @@ async function processFile() {
                     const dims = await window._viewer3d.loadIFC(arrayBuffer, barMap, cageAxisName, _couplerMap);
                     if (dims) _updateDimBoxesFromBREP(dims);
                     _buildViewerCheckboxes();
-                    // Enable face view DXF button now that BREP geometry is loaded
+                    // Enable face view DXF buttons now that BREP geometry is loaded
                     const faceBtn = document.getElementById('export-face-dxf-btn');
                     if (faceBtn) { faceBtn.disabled = false; faceBtn.title = ''; }
+                    const combinedBtn = document.getElementById('export-combined-dxf-btn');
+                    if (combinedBtn) { combinedBtn.disabled = false; combinedBtn.title = ''; }
                 } catch (e) {
                     console.warn('[main] BREP load error:', e);
                 }
@@ -337,9 +342,11 @@ function displayResults(parser) {
     if (fvSelect && faceLayers.length) {
         fvSelect.innerHTML = faceLayers.map(l => `<option value="${l}">${l}</option>`).join('');
         if (fvSection) fvSection.classList.remove('hidden');
-        // Keep button disabled until BREP finishes loading
+        // Keep buttons disabled until BREP finishes loading
         const faceBtn = document.getElementById('export-face-dxf-btn');
         if (faceBtn) { faceBtn.disabled = true; faceBtn.title = 'Waiting for 3D geometry to load…'; }
+        const combinedBtn = document.getElementById('export-combined-dxf-btn');
+        if (combinedBtn) { combinedBtn.disabled = true; combinedBtn.title = 'Waiting for 3D geometry to load…'; }
     }
 
     autoFillEDBInputs();
@@ -1801,6 +1808,202 @@ function exportFaceViewDXF(faceLayerName) {
     a.download = `${cageRef}-${faceLayerName}-view.dxf`;
     a.click();
     URL.revokeObjectURL(a.href);
+}
+
+// ── Combined face elevation + coupler plate template ──────────────────────────
+// One section per face that has VS/HS holes (e.g. F1A + N1A for P7349).
+// Each section overlays: BREP bar hull outlines (BARS) + coupler hole circles
+// (HOLES) + plate outlines (PLATE_OUTLINE) + dimension ticks (DIMS).
+// All coordinates in real IFC mm — state "Scale 1:15" in title for plotting.
+// Both layers share _cageDatum() so face view and template holes register exactly.
+async function exportCombinedFaceDXF() {
+    const btn = document.getElementById('export-combined-dxf-btn');
+    const orig = btn.textContent;
+    btn.textContent = 'Generating…'; btn.disabled = true;
+
+    try {
+        if (!allData.length) throw new Error('No cage data loaded.');
+        if (!_rawIfcText)    throw new Error('No IFC data loaded.');
+        const viewer = window._viewer3d;
+        if (!viewer || !viewer.brepLoaded) throw new Error('3D geometry not loaded — wait for 3D view to finish.');
+
+        // ── shared helpers ────────────────────────────────────────────────────
+        const { datumPx, datumPz } = _cageDatum();
+        const sepAxis = _detectFaceSepAxis();
+
+        const engineToFace2D = ([ex, ey, ez]) => {
+            const ix = ex * 1000, iy = -ez * 1000, iz = ey * 1000;
+            if (sepAxis === 'x') return [iy, iz];
+            if (sepAxis === 'y') return [ix, iz];
+            return [ix, iy];
+        };
+
+        function convexHull2D(pts) {
+            if (pts.length <= 2) return pts;
+            let s = 0;
+            for (let i = 1; i < pts.length; i++) if (pts[i][0] < pts[s][0]) s = i;
+            const hull = []; let cur = s;
+            do {
+                hull.push(pts[cur]);
+                let nxt = (cur + 1) % pts.length;
+                for (let i = 0; i < pts.length; i++) {
+                    const cross = (pts[nxt][0]-pts[cur][0])*(pts[i][1]-pts[cur][1])
+                                - (pts[nxt][1]-pts[cur][1])*(pts[i][0]-pts[cur][0]);
+                    if (cross > 0) nxt = i;
+                }
+                cur = nxt;
+            } while (cur !== s && hull.length <= pts.length);
+            return hull;
+        }
+
+        // ── IFC holes ─────────────────────────────────────────────────────────
+        const allHoles = _parseIFCBeamHoles(_rawIfcText);
+        if (!allHoles.length) throw new Error('No VS/HS coupler holes found in this IFC.');
+        const faceBuckets = _bucketHolesByFace(allHoles);
+        const faceSepAxis = sepAxis;
+
+        // ── DXF infrastructure ────────────────────────────────────────────────
+        const dxf  = [];
+        const emit = (...v) => v.forEach(x => dxf.push(String(x)));
+        const LINE   = (x1,z1,x2,z2,lyr) => emit('0','LINE','8',lyr,'10',x1.toFixed(1),'20',z1.toFixed(1),'30','0.0','11',x2.toFixed(1),'21',z2.toFixed(1),'31','0.0');
+        const CIRCLE = (cx,cz,r,lyr)      => emit('0','CIRCLE','8',lyr,'10',cx.toFixed(1),'20',cz.toFixed(1),'30','0.0','40',r.toFixed(2));
+        const TEXT   = (x,z,txt,h,lyr)    => emit('0','TEXT','8',lyr,'10',x.toFixed(1),'20',z.toFixed(1),'30','0.0','40',h.toFixed(1),'1',String(txt));
+        const HDIM   = (x0,x1,z,label)    => {
+            LINE(x0,z,x1,z,'DIMS'); LINE(x0,z-5,x0,z+5,'DIMS'); LINE(x1,z-5,x1,z+5,'DIMS');
+            TEXT((x0+x1)/2 - String(label).length*3, z+8, String(label), 8, 'DIMS');
+        };
+        const VDIM   = (x,z0,z1,label)    => {
+            LINE(x,z0,x,z1,'DIMS'); LINE(x-5,z0,x+5,z0,'DIMS'); LINE(x-5,z1,x+5,z1,'DIMS');
+            TEXT(x+8, (z0+z1)/2-4, String(label), 8, 'DIMS');
+        };
+
+        const fileEl  = document.getElementById('ifc-file');
+        const cageRef = (fileEl?.files[0]?.name || 'CAGE').replace(/\.[^.]+$/, '');
+
+        emit('0','SECTION','2','HEADER',
+             '9','$ACADVER','1','AC1009',
+             '9','$INSUNITS','70','4',
+             '0','ENDSEC');
+        emit('0','SECTION','2','TABLES',
+             '0','TABLE','2','LTYPE','70','1',
+             '0','LTYPE','2','CONTINUOUS','70','0','3','Solid line','72','65','73','0','40','0.0',
+             '0','ENDTAB',
+             '0','TABLE','2','LAYER','70','5',
+             '0','LAYER','2','BARS',         '70','0','62','3','6','CONTINUOUS',
+             '0','LAYER','2','HOLES',        '70','0','62','1','6','CONTINUOUS',
+             '0','LAYER','2','PLATE_OUTLINE','70','0','62','5','6','CONTINUOUS',
+             '0','LAYER','2','DIMS',         '70','0','62','8','6','CONTINUOUS',
+             '0','LAYER','2','TEXT',         '70','0','62','7','6','CONTINUOUS',
+             '0','ENDTAB',
+             '0','ENDSEC');
+        emit('0','SECTION','2','BLOCKS','0','ENDSEC');
+        emit('0','SECTION','2','ENTITIES');
+
+        const DIM_BELOW  = 80;   // mm reserved below each section for X tick marks
+        const HEADER_H   = 60;   // mm reserved above each section for title text
+        const SECTION_GAP = 600; // mm gap between sections
+        let baseZ = DIM_BELOW;   // first section face content starts here
+
+        for (const [faceName, faceHoles] of Object.entries(faceBuckets)) {
+            // ── BREP bar hull outlines ────────────────────────────────────────
+            const clouds = viewer.getFaceLayerVertexClouds(faceName);
+            const nBars = clouds.length || allData.filter(b => b.Avonmouth_Layer_Set === faceName).length;
+            for (const cloud of clouds) {
+                const pts2d = cloud.map(engineToFace2D);
+                const hull  = convexHull2D(pts2d);
+                if (hull.length < 2) continue;
+                for (let i = 0; i < hull.length; i++) {
+                    const a = hull[i], b = hull[(i+1) % hull.length];
+                    LINE(a[0]-datumPx, baseZ+(a[1]-datumPz), b[0]-datumPx, baseZ+(b[1]-datumPz), 'BARS');
+                }
+            }
+
+            // ── Template holes projected with shared datum ────────────────────
+            const faceZArr = faceHoles.map(h => h.zMm);
+            const zSpan    = Math.max(...faceZArr) - Math.min(...faceZArr);
+            const useY     = zSpan < 100;
+            const useLongY = faceSepAxis === 'x' && !useY;
+
+            const plotHoles = faceHoles
+                .map(h => ({ ...h,
+                    px: +(useLongY ? h.yMm - datumPx : h.xMm - datumPx).toFixed(1),
+                    pz: +((useY ? h.yMm : h.zMm) - datumPz).toFixed(1) }))
+                .sort((a, b) => a.px !== b.px ? a.px - b.px : a.pz - b.pz);
+            plotHoles.forEach((h, i) => { h.num = i + 1; });
+
+            for (const h of plotHoles) {
+                CIRCLE(h.px, baseZ + h.pz, h.holeDia / 2, 'HOLES');
+                TEXT(h.px + h.holeDia/2 + 3, baseZ + h.pz - 3,
+                    `${cageRef}-CPLR-${String(h.num).padStart(3,'0')}`, 5, 'TEXT');
+            }
+
+            // ── Plate outlines (at actual face coordinates) ───────────────────
+            const { vsPlates, hsPlates } = _computePlates(plotHoles, 2000, 300);
+            for (const plate of [...vsPlates, ...hsPlates]) {
+                const pType = `${plate.type}-PLATE-${String(plate.id).padStart(2,'0')}`;
+                LINE(plate.minX, baseZ+plate.minZ, plate.maxX, baseZ+plate.minZ, 'PLATE_OUTLINE');
+                LINE(plate.maxX, baseZ+plate.minZ, plate.maxX, baseZ+plate.maxZ, 'PLATE_OUTLINE');
+                LINE(plate.maxX, baseZ+plate.maxZ, plate.minX, baseZ+plate.maxZ, 'PLATE_OUTLINE');
+                LINE(plate.minX, baseZ+plate.maxZ, plate.minX, baseZ+plate.minZ, 'PLATE_OUTLINE');
+                TEXT(plate.minX, baseZ+plate.maxZ+6,
+                    `${pType}  ${Math.round(plate.length)}×${Math.round(plate.width)} mm  (${plate.holes.length} holes)`,
+                    9, 'TEXT');
+            }
+
+            // ── Dimension ticks ───────────────────────────────────────────────
+            const maxFacePx = Math.max(...plotHoles.map(h => h.px));
+            const maxFacePz = Math.max(...plotHoles.map(h => h.pz));
+
+            // Overall span dims
+            HDIM(0, maxFacePx, baseZ - 45, `${Math.round(maxFacePx)} mm`);
+            VDIM(-55, baseZ, baseZ + maxFacePz, `${Math.round(maxFacePz)} mm`);
+
+            // X tick marks for each unique hole X position
+            const uniqPx = [...new Set(plotHoles.map(h => Math.round(h.px)))].sort((a,b)=>a-b);
+            for (const xv of uniqPx) {
+                LINE(xv, baseZ - 15, xv, baseZ - 28, 'DIMS');
+                TEXT(xv - 8, baseZ - 40, String(xv), 6, 'DIMS');
+            }
+
+            // Z tick marks for each unique hole Z position
+            const uniqPz = [...new Set(plotHoles.map(h => Math.round(h.pz)))].sort((a,b)=>a-b);
+            for (const zv of uniqPz) {
+                LINE(-15, baseZ + zv, -28, baseZ + zv, 'DIMS');
+                TEXT(-75, baseZ + zv - 3, String(zv), 6, 'DIMS');
+            }
+
+            // ── Section title ─────────────────────────────────────────────────
+            const nVS = vsPlates.reduce((s, p) => s + p.holes.length, 0);
+            const nHS = hsPlates.reduce((s, p) => s + p.holes.length, 0);
+            TEXT(0, baseZ + maxFacePz + 20,
+                `${cageRef}  |  ${faceName} FACE ELEVATION  |  Scale 1:15  |  ${nBars} bars  |  ${nVS} VS + ${nHS} HS holes  |  ${vsPlates.length + hsPlates.length} plates`,
+                18, 'TEXT');
+            TEXT(0, baseZ + maxFacePz + 5,
+                `Datum: bottom-left of outer face bars (IFC mm)  |  Hole dia = coupler OD + 2 mm tolerance`,
+                8, 'TEXT');
+
+            // Advance baseZ for next section
+            baseZ += maxFacePz + HEADER_H + SECTION_GAP + DIM_BELOW;
+        }
+
+        emit('0','ENDSEC','0','EOF');
+
+        const content = dxf.join('\r\n') + '\r\n';
+        const blob = new Blob([content], { type: 'application/octet-stream' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `${cageRef}-site-template.dxf`;
+        document.body.appendChild(a); a.click();
+        document.body.removeChild(a); URL.revokeObjectURL(a.href);
+
+        console.log(`[CombinedDXF] done — ${Object.keys(faceBuckets).length} face sections, ${allHoles.length} total holes`);
+
+    } catch (e) {
+        console.error('[exportCombinedFaceDXF]', e);
+        alert(`Site Template DXF failed: ${e.message}`);
+    } finally {
+        btn.textContent = orig; btn.disabled = false;
+    }
 }
 
 async function exportTemplateDXF(maxLength, maxWidth) {
