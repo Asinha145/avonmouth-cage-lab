@@ -1667,13 +1667,15 @@ function _cageDatum() {
     };
 }
 
-// Compute the nearest VS/HS bar intersection per face mesh layer (F1A, F3A, N1A, N3A …).
+// Compute the nearest VS/HS bar crossing per face mesh layer (F1A, F3A, N1A, N3A …).
 // Returns array of { layer, ex, ey, ez } in Three.js engine coordinates (metres).
 // engine-x = IFC-X/1000, engine-y = IFC-Z/1000, engine-z = -IFC-Y/1000
 //
-// Only places a marker where a VS bar and HS bar ACTUALLY CROSS — both bars must
-// overlap in the axis perpendicular to their run direction. Takes the valid crossing
-// closest to the datum corner.
+// Within a face mesh layer, every VS bar and every HS bar form a grid and always
+// cross each other. We just need the nearest VS bar (min Y → datum start) and
+// nearest HS bar (min Z → datum bottom). Bars are pre-filtered to "grid bars only"
+// by keeping only those with Length above the median for their orientation group —
+// this drops bent end bars, U-bars, and hairpins that don't span the full mesh.
 function _computeLayerDatums() {
     const faceLayerRe = /^[FN]\d+A$/i;
     const layers = [...new Set(
@@ -1682,53 +1684,55 @@ function _computeLayerDatums() {
     )];
 
     const { datumPx, datumPz } = _cageDatum();
-    const TOL = 50; // mm tolerance for bar end trim / stagger
+
+    // Helper: median of an array
+    const median = arr => {
+        if (!arr.length) return 0;
+        const s = [...arr].sort((a, b) => a - b);
+        const m = Math.floor(s.length / 2);
+        return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+    };
 
     const results = [];
     for (const layer of layers) {
         const bars = allData.filter(b => b.Avonmouth_Layer_Set === layer);
 
-        // Pre-compute geometry for each bar in the layer
-        const vBars = bars.filter(b => b.Orientation === 'Vertical').map(b => ({
-            yMid: ((b.Start_Y ?? 0) + (b.End_Y ?? 0)) / 2,
-            zMin: Math.min(b.Start_Z ?? Infinity,  b.End_Z ?? Infinity),
-            zMax: Math.max(b.Start_Z ?? -Infinity, b.End_Z ?? -Infinity),
-        }));
-        const hBars = bars.filter(b => b.Orientation === 'Horizontal').map(b => ({
-            zMid: ((b.Start_Z ?? 0) + (b.End_Z ?? 0)) / 2,
-            yMin: Math.min(b.Start_Y ?? Infinity,  b.End_Y ?? Infinity),
-            yMax: Math.max(b.Start_Y ?? -Infinity, b.End_Y ?? -Infinity),
-        }));
+        const vRaw = bars.filter(b => b.Orientation === 'Vertical');
+        const hRaw = bars.filter(b => b.Orientation === 'Horizontal');
+        if (!vRaw.length || !hRaw.length) continue;
+
+        // Drop bars shorter than half the median length for their group —
+        // removes bent bars / hairpins / end bars that aren't part of the regular grid
+        const vMedian = median(vRaw.map(b => b.Length ?? 0));
+        const hMedian = median(hRaw.map(b => b.Length ?? 0));
+        const vBars = vRaw.filter(b => (b.Length ?? 0) >= vMedian * 0.5);
+        const hBars = hRaw.filter(b => (b.Length ?? 0) >= hMedian * 0.5);
         if (!vBars.length || !hBars.length) continue;
 
-        // Find the valid (VS, HS) crossing closest to the datum corner
-        let bestDist = Infinity, bestVsY = null, bestHsZ = null;
-        for (const vs of vBars) {
-            for (const hs of hBars) {
-                // Intersection is real only if:
-                //   VS bar Y lies within HS bar Y range (with tolerance)
-                //   HS bar Z lies within VS bar Z range (with tolerance)
-                if (vs.yMid < hs.yMin - TOL || vs.yMid > hs.yMax + TOL) continue;
-                if (hs.zMid < vs.zMin - TOL || hs.zMid > vs.zMax + TOL) continue;
+        // Nearest VS bar = min Y centreline (closest to datum start along wall)
+        const nearestV = vBars.reduce((best, b) => {
+            const y = ((b.Start_Y ?? 0) + (b.End_Y ?? 0)) / 2;
+            return y < best.y ? { b, y } : best;
+        }, { b: null, y: Infinity });
 
-                const dist = Math.hypot(vs.yMid - datumPx, hs.zMid - datumPz);
-                if (dist < bestDist) {
-                    bestDist = dist;
-                    bestVsY  = vs.yMid;
-                    bestHsZ  = hs.zMid;
-                }
-            }
-        }
-        if (bestVsY === null) {
-            console.warn(`[layerDatums] ${layer}: no valid VS/HS crossing found`);
-            continue;
-        }
+        // Nearest HS bar = min Z centreline (closest to datum at bottom)
+        const nearestH = hBars.reduce((best, b) => {
+            const z = ((b.Start_Z ?? 0) + (b.End_Z ?? 0)) / 2;
+            return z < best.z ? { b, z } : best;
+        }, { b: null, z: Infinity });
 
-        // Face-plane X: mean Start_X of bars in this layer
-        const xVals = bars.flatMap(b => [b.Start_X, b.End_X]).filter(v => v != null);
+        if (!nearestV.b || !nearestH.b) continue;
+
+        const vsY = nearestV.y;
+        const hsZ = nearestH.z;
+
+        // Face-plane X: mean Start_X of grid bars in this layer
+        const gridBars = [...vBars, ...hBars];
+        const xVals = gridBars.flatMap(b => [b.Start_X, b.End_X]).filter(v => v != null);
         const faceX = xVals.length ? xVals.reduce((s, v) => s + v, 0) / xVals.length : 0;
 
-        results.push({ layer, ex: faceX / 1000, ey: bestHsZ / 1000, ez: -bestVsY / 1000 });
+        console.log(`[layerDatums] ${layer}: vsY=${Math.round(vsY)} hsZ=${Math.round(hsZ)} faceX=${Math.round(faceX)} (${vBars.length}V/${hBars.length}H grid bars)`);
+        results.push({ layer, ex: faceX / 1000, ey: hsZ / 1000, ez: -vsY / 1000 });
     }
     return results;
 }
