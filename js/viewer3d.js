@@ -445,8 +445,10 @@ class Viewer3D {
         if (tb.minX === Infinity) return;
         // Datum = (min IFC-X face, min IFC-Z bottom, min IFC-Y cage start)
         // In engine coords: minX, minY, maxZ  (engine-z = -IFC-Y/1000 → min IFC-Y → max engine-z)
-        const r   = this._orbit.spherical.radius;
-        const geo = new THREE.SphereGeometry(r * 0.018, 16, 16);
+        const box = new THREE.Box3();
+        this.scene.traverse(o => { if (o.isMesh && o !== this._datumMarker) box.expandByObject(o); });
+        const size = box.isEmpty() ? 1 : box.getSize(new THREE.Vector3()).length();
+        const geo = new THREE.SphereGeometry(size * 0.004, 12, 12);
         const mat = new THREE.MeshBasicMaterial({ color: 0xff2222, depthTest: false });
         const sphere = new THREE.Mesh(geo, mat);
         sphere.position.set(tb.minX, tb.minY, tb.maxZ);
