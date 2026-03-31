@@ -1670,6 +1670,10 @@ function _cageDatum() {
 // Compute the nearest VS/HS bar intersection per face mesh layer (F1A, F3A, N1A, N3A …).
 // Returns array of { layer, ex, ey, ez } in Three.js engine coordinates (metres).
 // engine-x = IFC-X/1000, engine-y = IFC-Z/1000, engine-z = -IFC-Y/1000
+//
+// Only places a marker where a VS bar and HS bar ACTUALLY CROSS — both bars must
+// overlap in the axis perpendicular to their run direction. Takes the valid crossing
+// closest to the datum corner.
 function _computeLayerDatums() {
     const faceLayerRe = /^[FN]\d+A$/i;
     const layers = [...new Set(
@@ -1677,42 +1681,54 @@ function _computeLayerDatums() {
                .map(b => b.Avonmouth_Layer_Set)
     )];
 
+    const { datumPx, datumPz } = _cageDatum();
+    const TOL = 50; // mm tolerance for bar end trim / stagger
+
     const results = [];
     for (const layer of layers) {
         const bars = allData.filter(b => b.Avonmouth_Layer_Set === layer);
 
-        // Split by orientation (already computed by parser)
-        const vBars = bars.filter(b => b.Orientation === 'Vertical');
-        const hBars = bars.filter(b => b.Orientation === 'Horizontal');
+        // Pre-compute geometry for each bar in the layer
+        const vBars = bars.filter(b => b.Orientation === 'Vertical').map(b => ({
+            yMid: ((b.Start_Y ?? 0) + (b.End_Y ?? 0)) / 2,
+            zMin: Math.min(b.Start_Z ?? Infinity,  b.End_Z ?? Infinity),
+            zMax: Math.max(b.Start_Z ?? -Infinity, b.End_Z ?? -Infinity),
+        }));
+        const hBars = bars.filter(b => b.Orientation === 'Horizontal').map(b => ({
+            zMid: ((b.Start_Z ?? 0) + (b.End_Z ?? 0)) / 2,
+            yMin: Math.min(b.Start_Y ?? Infinity,  b.End_Y ?? Infinity),
+            yMax: Math.max(b.Start_Y ?? -Infinity, b.End_Y ?? -Infinity),
+        }));
         if (!vBars.length || !hBars.length) continue;
 
-        // Nearest vertical bar = smallest min(Start_Y, End_Y) — leftmost in face view
-        const nearestV = vBars.reduce((best, b) => {
-            const y = Math.min(b.Start_Y ?? Infinity, b.End_Y ?? Infinity);
-            return y < best.y ? { b, y } : best;
-        }, { b: null, y: Infinity }).b;
+        // Find the valid (VS, HS) crossing closest to the datum corner
+        let bestDist = Infinity, bestVsY = null, bestHsZ = null;
+        for (const vs of vBars) {
+            for (const hs of hBars) {
+                // Intersection is real only if:
+                //   VS bar Y lies within HS bar Y range (with tolerance)
+                //   HS bar Z lies within VS bar Z range (with tolerance)
+                if (vs.yMid < hs.yMin - TOL || vs.yMid > hs.yMax + TOL) continue;
+                if (hs.zMid < vs.zMin - TOL || hs.zMid > vs.zMax + TOL) continue;
 
-        // Nearest horizontal bar = smallest min(Start_Z, End_Z) — bottommost in face view
-        const nearestH = hBars.reduce((best, b) => {
-            const z = Math.min(b.Start_Z ?? Infinity, b.End_Z ?? Infinity);
-            return z < best.z ? { b, z } : best;
-        }, { b: null, z: Infinity }).b;
+                const dist = Math.hypot(vs.yMid - datumPx, hs.zMid - datumPz);
+                if (dist < bestDist) {
+                    bestDist = dist;
+                    bestVsY  = vs.yMid;
+                    bestHsZ  = hs.zMid;
+                }
+            }
+        }
+        if (bestVsY === null) {
+            console.warn(`[layerDatums] ${layer}: no valid VS/HS crossing found`);
+            continue;
+        }
 
-        if (!nearestV || !nearestH) continue;
-
-        // Intersection IFC coordinates
-        const vsY  = ((nearestV.Start_Y ?? 0) + (nearestV.End_Y ?? 0)) / 2;  // V bar centreline Y
-        const hsZ  = ((nearestH.Start_Z ?? 0) + (nearestH.End_Z ?? 0)) / 2;  // H bar centreline Z
-        // Face-plane X: mean Start_X of all bars in this layer
+        // Face-plane X: mean Start_X of bars in this layer
         const xVals = bars.flatMap(b => [b.Start_X, b.End_X]).filter(v => v != null);
         const faceX = xVals.length ? xVals.reduce((s, v) => s + v, 0) / xVals.length : 0;
 
-        results.push({
-            layer,
-            ex:  faceX / 1000,
-            ey:  hsZ   / 1000,
-            ez: -vsY   / 1000,
-        });
+        results.push({ layer, ex: faceX / 1000, ey: bestHsZ / 1000, ez: -bestVsY / 1000 });
     }
     return results;
 }
