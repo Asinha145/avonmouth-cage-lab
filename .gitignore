@@ -4,3 +4,6 @@ node_modules/
 templates/*.xlsm
 templates/*.xlsx
 templates/*.xls
+
+# Reference test cages — local only, not for public repo
+test-cages/

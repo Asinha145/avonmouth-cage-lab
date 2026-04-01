@@ -117,6 +117,41 @@ Read it before touching any output-producing code. Update it before implementing
 
 ---
 
+## Development Rules
+
+### 1. Every new feature must handle all three `sepAxis` cases
+
+`_detectFaceSepAxis()` returns `'x'`, `'y'`, or `'z'`. Any new function that touches
+bar coordinates, datum, DXF export, or 3D placement **must** branch on all three.
+Missing a case silently produces wrong output for that cage direction.
+
+### 2. Backtest on all three reference cages before merge
+
+| Cage | `sepAxis` | File |
+|---|---|---|
+| 1613 (2HD70719AC1) | `'y'` (IFC-X running wall) | `test-cages/1613_2HD70719AC1.ifc` |
+| P7349 C1           | `'x'` (IFC-Y running wall) | `test-cages/P7349_C1.ifc` |
+| RF35 C01           | `'z'` (slab, T/B only)    | `test-cages/RF35_C01.ifc` |
+
+All three files live in `test-cages/` inside this repo. Do not delete or rename them.
+
+These three cages together cover all three axis directions. A feature that passes
+on one cage may silently break the other two.
+
+### 3. Layer datum uses only that layer's own bars
+
+The orange datum sphere for each face layer (F1A, F3A, N1A, …) must be computed
+from the VS/HS bar crossing within **that layer's bars only**.
+- F1A datum → F1A bars only
+- F3A datum → F3A bars only
+- Never mix bars from F1A into the F3A datum calculation (the crossing will be at
+  the wrong physical position)
+
+If a layer has no VS bars or no HS bars, no datum marker is placed for that layer
+(correct behaviour — do not fabricate a crossing that doesn't exist).
+
+---
+
 ## Do Not
 
 - Commit `templates/*.xlsm` / `*.xlsx` — gitignored, proprietary
