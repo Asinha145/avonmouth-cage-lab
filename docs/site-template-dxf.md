@@ -7,9 +7,9 @@
 
 ## What It Produces
 
-A single AC1009 DXF file (`{cageRef}-site-template.dxf`) with one section per
+A single AC1009 DXF file (`A4080-EXP-XX-AF-DR-MA-20{last4}.dxf`) with one section per
 face that has VS/HS coupler holes. For P7349: F1A section and N1A section,
-stacked vertically in one file.
+stacked vertically in one file, with an A4080 title block at the base.
 
 Each section overlays:
 
@@ -20,6 +20,7 @@ Each section overlays:
 | `PLATE_OUTLINE` | Blue (5) | Plate rectangles — 25mm clearance from outermost hole edge |
 | `DIMS` | Grey (8) | Overall span dims + per-hole tick marks with mm labels |
 | `TEXT` | White (7) | Section title, plate IDs, datum note |
+| `TITLE_BLOCK` | White (7) | A4080 border, cells, drawing number, scale, date |
 
 ---
 
@@ -29,7 +30,7 @@ Each section overlays:
 IFC file
   ├─ Text parser (ifc-parser.js)
   │    └─ allData — bar layer assignments + endpoints
-  │         └─ _cageDatum()        → shared {datumPx, datumPz}
+  │         └─ _cageDatum()         → shared {datumPx, datumPz}
   │         └─ _detectFaceSepAxis() → 'x' | 'y' | 'z'
   │         └─ _parseIFCBeamHoles() → VS/HS hole positions
   │              └─ _bucketHolesByFace() → { F1A: [...], N1A: [...] }
@@ -67,7 +68,7 @@ Set plot scale to 1:15 in AutoCAD when printing. At 1:15:
 
 ```
 HEADER   — AC1009, INSUNITS=4 (mm)
-TABLES   — LTYPE (CONTINUOUS) + 5 LAYERs
+TABLES   — LTYPE (CONTINUOUS) + 6 LAYERs (BARS, HOLES, PLATE_OUTLINE, DIMS, TEXT, TITLE_BLOCK)
 BLOCKS   — empty (required by AC1009)
 ENTITIES — all geometry
   [F1A section]
@@ -82,6 +83,11 @@ ENTITIES — all geometry
     HOLES:          88 CIRCLE entities
     PLATE_OUTLINE:  5 plate rectangles (0 VS + 5 HS)
     DIMS + TEXT
+  [TITLE_BLOCK]
+    A0 border (1189×841 mm × 15 = 17,835 × 12,615 mm model space)
+    Cell geometry scaled from A4080 DXF template
+    Drawing number: A4080-EXP-XX-AF-DR-MA-20{last4}
+    Scale: 1:15 | Date: auto
 EOF
 ```
 
@@ -112,11 +118,32 @@ Sample VS hole: px=5,202 pz=1,700 — within face bounds (0–10,325 × 0–5,25
 
 ---
 
+## Title Block — A4080 Format
+
+Drawing border is A0 landscape (1189 × 841 mm) scaled ×15 into model space.
+Title block strip is 100 mm tall at the base of the drawing (pz = 0 to -1500 in model space).
+
+| Field | Value |
+|---|---|
+| Drawing number | `A4080-EXP-XX-AF-DR-MA-20{last4}` |
+| Scale | `1:15` |
+| Date | `new Date()` — auto at export time |
+| Originator | A4080 / EXP |
+| Project ref | from cageRef |
+
+**Pending fields** (to fill once DWG template confirmed):
+- Project name full text
+- Originator logo area
+- DRAWN / CHECKED / APPROVED names
+- Purpose of Issue / Status code
+
+---
+
 ## UI
 
 Button: **📐 Site Template DXF** in the Face View section.
 - Disabled until BREP geometry finishes loading (same timing as Face View DXF button).
-- Downloads `{cageRef}-site-template.dxf`.
+- Downloads `A4080-EXP-XX-AF-DR-MA-20{last4}.dxf`.
 - Requires: cage loaded + 3D view rendered.
 
 Debug button (single face): **📐 Face View DXF** — BREP bar outlines only, no holes.
@@ -127,8 +154,9 @@ Debug button (single face): **📐 Face View DXF** — BREP bar outlines only, n
 
 | Function | Role |
 |---|---|
-| `_cageDatum()` | Shared datum from F1A+N1A bar endpoints. Committed b9b0362. |
-| `exportCombinedFaceDXF()` | Main combined export. Committed f05386e. |
+| `_cageDatum()` | Shared datum from outermost face layer bar endpoints. |
+| `_detectFaceSepAxis()` | Geometry-based: 'x', 'y', or 'z' (slab). |
+| `exportCombinedFaceDXF()` | Main combined export with title block. |
 | `exportFaceViewDXF(face)` | Single-face BREP bar outlines only (debug). |
 | `exportTemplateDXF()` | Standalone plate template (hole layout, stacked plate diagrams). |
 | `getFaceLayerVertexClouds(layer)` | `js/viewer3d.js` — BREP vertex extraction per layer. |
@@ -143,12 +171,14 @@ Debug button (single face): **📐 Face View DXF** — BREP bar outlines only, n
 | `b9b0362` | Shared datum fix — `_cageDatum()` aligns face view and template |
 | `0b94eaa` | `docs/datum.md` — IFC placement investigation |
 | `f05386e` | `exportCombinedFaceDXF()` — combined site template DXF |
+| `0cf201a` | docs: site-template-dxf.md + update todo + output-spec |
+| `f464e2d` | A4080 title block, persp/ortho toggle, datum sphere |
 
 ---
 
 ## Pending / Next Steps
 
-- [ ] Test `P7349_C1-site-template.dxf` in AutoCAD — confirm bar outlines and holes overlay correctly
+- [ ] Test `A4080-EXP-XX-AF-DR-MA-20xxxx.dxf` in AutoCAD — confirm bar outlines and holes overlay correctly
 - [ ] Verify N1A face orientation (currently same left-right as F1A — may need mirror for "viewed from outside N1A")
-- [ ] Add drawing border / title block matching A4080-EXP-XX-HS-DR-MA series format
-- [ ] Consider adding bar diameter labels on each BARS hull outline
+- [ ] Fill in title block fields: project name, originator logo, DRAWN/CHECKED/APPROVED, Purpose of Issue
+- [ ] Bar diameter labels on each BARS hull outline (optional)

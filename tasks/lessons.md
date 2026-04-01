@@ -335,3 +335,44 @@ VS struts keep auto-detect: `long=Z` for wall cages, `long=X` for slab cages (wh
 **VS1 asymmetry:** All 25 VS1 couplers are on the F face only (zero on N face) — VS1 struts in P7349 are single-ended on the F1A side.
 
 ---
+
+## Slab Bars Cannot Be Split by Orientation Field (Apr 2026)
+
+**Mistake:** `_computeLayerDatums` split bars into two grid groups using `Orientation === 'Vertical'` vs `'Horizontal'`. For slab cages (RF35, `sepAxis='z'`), every bar is classified `'Horizontal'` by the parser (`|Dir_Z| < 0.5` for all). The Vertical group was always empty → function returned 0 markers for all T/B layers.
+
+**Rule:** For `sepAxis='z'` (slab), split by `|Dir_Y| > |Dir_X|` (y-running, fixed at IFC-X) vs `|Dir_X| > |Dir_Y|` (x-running, fixed at IFC-Y). `Dir_X`, `Dir_Y`, `Dir_Z` are stored on all bar objects and are always available.
+
+**Why:** `Orientation` is computed from `|Dir_Z| >= 0.5`. Slab bars are horizontal in global IFC space, so `Dir_Z ≈ 0` for all of them — both grid directions are "Horizontal". The two mesh directions must instead be distinguished by which horizontal axis they run along.
+
+---
+
+## Layer Datum Engine Coord Mapping Must Be Explicit Per sepAxis (Apr 2026)
+
+**Mistake:** `_computeLayerDatums` used `faceX = mean IFC-X` for the face-plane constant coordinate and plugged it directly as `ex = faceX/1000` for all sepAxis cases. For `sepAxis='y'` (face plane ⊥ IFC-Y), the face constant coordinate is IFC-Y — which must become `ez = -faceCoord/1000`, not `ex`.
+
+**Engine coordinate mapping (IFC → Three.js):**
+- `engine-x = IFC-X / 1000`
+- `engine-y = IFC-Z / 1000`
+- `engine-z = -IFC-Y / 1000`
+
+**Rule:** For each sepAxis, derive three components explicitly:
+
+| sepAxis | face constant | vBars const axis → engine | hBars const axis → engine |
+|---|---|---|---|
+| `x` | IFC-X → `ex` | IFC-Y → `ez = -IFC-Y/1000` | IFC-Z → `ey` |
+| `y` | IFC-Y → `ez` | IFC-X → `ex` | IFC-Z → `ey` |
+| `z` (slab) | IFC-Z → `ey` | IFC-X (y-running) → `ex` | IFC-Y (x-running) → `ez` |
+
+Never shortcut by using the "nearest V bar's IFC-Y" — for `sepAxis='y'` that IFC-Y is the face constant, not a bar-specific position. Use the face coordinate formula directly.
+
+---
+
+## Datum Sphere Size — Use Scene Diagonal, Not Orbit Radius (Apr 2026)
+
+**Mistake:** Initial datum sphere radius = `orbitRadius * 0.018` where orbitRadius ≈ 16.5 m → sphere diameter ≈ 600 mm. Visible as a large red ball on screen ("like a football").
+
+**Rule:** Size visual markers relative to `_sceneSize()` (scene bounding box diagonal), not orbit radius. `_sceneSize() * 0.004` gives ≈ 46 mm for a typical cage — a visible dot without obscuring geometry.
+
+**Also:** `_sceneSize()` must exclude datum markers themselves from the bbox calculation, otherwise the first marker inflates the "scene size" and the second marker gets sized larger, creating a positive feedback loop.
+
+---
