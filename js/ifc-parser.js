@@ -1003,11 +1003,20 @@ IFCParser.prototype.extractSlabData = function(bars) {
     const b2Pos = uniquePos(b2, 'x');
 
     const meshBars = [...t1aBars, ...b1aBars];
-    const maxLen = bs => bs.length ? Math.max(...bs.map(b => b.Length || 0)) : 0;
-    // H36: cage length = T2/B2 bars run along the length dimension → their bar length = cage length
-    const lenMm = maxLen([...t2, ...b2]);
-    // I36: cage height = T1/B1 bars run along the height dimension → their bar length = cage height
-    const hgtMm = maxLen([...t1all, ...b1all]);
+    // Stagger-aware extent: span of Start+End positions across the whole role group.
+    // Includes CPLR lapper bars which start beyond the main bar end — max(Length) alone misses them.
+    const extentMm = (bs, axis) => {
+        const vals = bs.flatMap(b => [b[`Start_${axis}`], b[`End_${axis}`]]).filter(v => v != null && isFinite(v));
+        return vals.length >= 2 ? Math.max(...vals) - Math.min(...vals) : 0;
+    };
+    // cageAxisName='X' → T1/B1 run along X (height), T2/B2 run along Y (length)
+    // cageAxisName='Y' → T1/B1 run along Y (height), T2/B2 run along X (length)
+    const hgtAxis = this.cageAxisName === 'Y' ? 'Y' : 'X';
+    const lenAxis = this.cageAxisName === 'Y' ? 'X' : 'Y';
+    // H36: max face extent — computed per face then max'd to avoid inflating by T2/B2 face offset
+    const lenMm = Math.max(extentMm(t2, lenAxis), extentMm(b2, lenAxis));
+    // I36: max face extent — stagger-aware (B1-CPLR/T1-CPLR lapper bars extend beyond main bar end)
+    const hgtMm = Math.max(extentMm(t1all, hgtAxis), extentMm(b1all, hgtAxis));
 
     const bw      = b => b.Weight ?? b.Formula_Weight ?? 0;
     const meshWt  = meshBars.reduce((s, b) => s + bw(b), 0);

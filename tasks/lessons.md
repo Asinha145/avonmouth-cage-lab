@@ -229,6 +229,33 @@ const holeMedian = hasFN ? median(holes.map(h => h.yMm)) : median(holes.map(h =>
 
 ---
 
+## Slab H36/I36 — `max(Length)` Misses Staggered CPLR Lapper Bars (Apr 2026)
+
+**Mistake:** `extractSlabData` used `max(Length)` of T1+B1 bars for I36 and T2+B2 bars for H36.
+For RF16: T1/B1 bars Length=7000mm → I36=7000mm. But B1-CPLR lapper bars start at X=2,009,850
+(1,050mm beyond the B1 bar end at 2,008,800), giving a real cage height of 8,050mm.
+`max(Length)` returns 7000mm — the lapper bar's shorter length never wins the max.
+
+**Rule:** Use coordinate extent per face (Start+End positions of all role bars including CPLR variants),
+then max across faces:
+```javascript
+const extentMm = (bs, axis) => {
+    const vals = bs.flatMap(b => [b[`Start_${axis}`], b[`End_${axis}`]]).filter(v => v != null && isFinite(v));
+    return vals.length >= 2 ? Math.max(...vals) - Math.min(...vals) : 0;
+};
+const hgtMm = Math.max(extentMm(t1all, hgtAxis), extentMm(b1all, hgtAxis));
+const lenMm = Math.max(extentMm(t2, lenAxis), extentMm(b2, lenAxis));
+```
+
+**Why max per face, not combined?** T2 and B2 bars are on opposite slab faces — their Y positions are
+offset by the slab face separation (~25mm). Combining them inflates the length by that offset.
+Computing per face and taking the max avoids this while still capturing genuine stagger within a face.
+
+**Axis mapping:** `cageAxisName='X'` → T1/B1 run along X (hgtAxis='X'), T2/B2 run along Y (lenAxis='Y').
+Reverse for `cageAxisName='Y'`.
+
+---
+
 ## Template DXF — yMid Filter Silently Drops Multi-Face Couplers (March 2026)
 
 **Mistake:** `_parseIFCBeamHoles` filtered by `yMm > yMid` to select the "F1A face". For P7349 (a multi-layer wall cage with F1A, F3A, N1A, N3A, N5A, F5A faces), 118 of 162 VS/HS holes were silently dropped — only 44 survived. No warning was shown.
