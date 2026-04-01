@@ -1773,13 +1773,24 @@ function _computeLayerDatums() {
         const hBars = hRaw.filter(b => (b.Length ?? 0) >= hMed * 0.5);
         if (!vBars.length || !hBars.length) continue;
 
-        // Stagger-cluster representative positions
-        const vUnits = groupBars(vBars).map(grp => ({
-            pos: grp.reduce((s, b) => s + vPosFn(b), 0) / grp.length,
-        }));
-        const hUnits = groupBars(hBars).map(grp => ({
-            pos: grp.reduce((s, b) => s + hPosFn(b), 0) / grp.length,
-        }));
+        // Stagger-cluster representative positions.
+        // For slabs (sepAxis='z') skip stagger clustering: the parser assigns all
+        // y-running bars in a layer to the same Stagger_Cluster_ID (they all share
+        // the same perpendicular-to-cage-axis position), so groupBars() collapses
+        // them into one cluster and returns the centroid of the whole layer — not
+        // the nearest bar. Use each bar individually instead.
+        let vUnits, hUnits;
+        if (sepAxis === 'z') {
+            vUnits = vBars.map(b => ({ pos: vPosFn(b) }));
+            hUnits = hBars.map(b => ({ pos: hPosFn(b) }));
+        } else {
+            vUnits = groupBars(vBars).map(grp => ({
+                pos: grp.reduce((s, b) => s + vPosFn(b), 0) / grp.length,
+            }));
+            hUnits = groupBars(hBars).map(grp => ({
+                pos: grp.reduce((s, b) => s + hPosFn(b), 0) / grp.length,
+            }));
+        }
 
         // Nearest cluster to datum edge (minimum coordinate)
         const nearestV = vUnits.reduce((best, u) => u.pos < best.pos ? u : best, { pos: Infinity });

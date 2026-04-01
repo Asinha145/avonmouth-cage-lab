@@ -394,6 +394,27 @@ Never shortcut by using the "nearest V bar's IFC-Y" — for `sepAxis='y'` that I
 
 ---
 
+## Slab Layer Datum — Skip Stagger Clustering in `_computeLayerDatums` (Apr 2026)
+
+**Mistake:** `_computeLayerDatums` used `groupBars()` (stagger cluster averaging) for all `sepAxis` cases, including slabs. For RF35 (`sepAxis='z'`), the parser assigns ALL y-running bars in a layer (e.g. all 31 B1A y-running bars) to a single `Stagger_Cluster_ID` (e.g. `B1A_H24`). `groupBars()` collapses them into one cluster and averages their IFC-X positions → returns the slab centroid (~2,026,572mm) instead of the nearest bar edge (~2,023,558mm). Orange datum sphere appeared 3m+ away from the slab corner.
+
+**Why the parser clusters all y-running bars together:** The stagger clustering algorithm groups bars at the same structural position along the cage axis (IFC-Y for RF35). All y-running bars have the same IFC-Y midpoint (they run the full slab span), so they all fall in one cluster.
+
+**Rule:** For `sepAxis='z'` (slab), bypass stagger clustering in `_computeLayerDatums`:
+```javascript
+if (sepAxis === 'z') {
+    vUnits = vBars.map(b => ({ pos: vPosFn(b) }));
+    hUnits = hBars.map(b => ({ pos: hPosFn(b) }));
+} else {
+    vUnits = groupBars(vBars).map(...);
+    hUnits = groupBars(hBars).map(...);
+}
+```
+
+**Why stagger clustering is still correct for walls:** Wall ring bars at the same structural Z position stagger by ±33mm. Averaging the pair gives the true centreline — the datum sits exactly between them. This logic does not apply to slab bars.
+
+---
+
 ## Datum Sphere Size — Use Scene Diagonal, Not Orbit Radius (Apr 2026)
 
 **Mistake:** Initial datum sphere radius = `orbitRadius * 0.018` where orbitRadius ≈ 16.5 m → sphere diameter ≈ 600 mm. Visible as a large red ball on screen ("like a football").
