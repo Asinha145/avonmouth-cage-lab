@@ -9,7 +9,7 @@
  * What stays the same:
  *   - ifc-parser.js for ALL metadata, classification, validation, stats
  *   - C01 rejection logic
- *   - Stagger clustering (Z_BAND = 100mm gap threshold within clustering)
+ *   - Stagger clustering (DZ_MAX = 100mm merge threshold; Z_BAND = 500mm height-zone grouping)
  *   - Step detection (mesh bars only, 50mm XY grid, 15–300mm range)
  *   - Weight: ATK/ICOS Rebar 'Weight' pset only — never formula for cage totals
  *   - UDL: formula weight (π×r²×L×7777) — geometry-based, pset-independent
@@ -1510,8 +1510,8 @@ function _computePlates(plotHoles, maxLength, maxWidth) {
     // Roof cage VS: all holes at same Z, spread across X                → long = X, narrow = Z
     function getOrientation(holes) {
         if (!holes.length) return { bandKey: 'px', groupKey: 'pz' };
-        const xUniq = new Set(holes.map(h => Math.round(h.px))).size;
-        const zUniq = new Set(holes.map(h => Math.round(h.pz))).size;
+        const xUniq = new Set(holes.map(h => Math.round(h.px / 15))).size;
+        const zUniq = new Set(holes.map(h => Math.round(h.pz / 15))).size;
         // More unique Z positions → long axis is Z (wall/typical)
         // More unique X positions → long axis is X (roof/flat cage)
         return zUniq >= xUniq
@@ -1533,32 +1533,6 @@ function _computePlates(plotHoles, maxLength, maxWidth) {
 //   F*/N* layers present → wall cage → faces separated in Y → compare Y
 //   T*/B* layers present → slab cage → faces separated in Z → compare Z
 // Returns e.g. 'F1A', 'T1A', or null if no face layers in allData.
-function _detectFaceName(holes) {
-    const faceRe = /^[FNTB]\d/i;
-    const layerCoords = {};
-    for (const bar of allData) {
-        const layer = bar.Avonmouth_Layer_Set;
-        if (!layer || !faceRe.test(layer)) continue;
-        const y = bar.Start_Y ?? bar.End_Y;
-        const z = bar.Start_Z ?? bar.End_Z;
-        if (y == null && z == null) continue;
-        if (!layerCoords[layer]) layerCoords[layer] = [];
-        layerCoords[layer].push({ y, z });
-    }
-    if (!Object.keys(layerCoords).length) return null;
-    const median = arr => { const s = [...arr].filter(v => v != null).sort((a, b) => a - b); return s[Math.floor(s.length / 2)]; };
-    // Wall (F/N) → detect by Y; Slab (T/B) → detect by Z
-    const hasFN = Object.keys(layerCoords).some(l => /^[FN]\d/i.test(l));
-    const holeMedian = hasFN ? median(holes.map(h => h.yMm)) : median(holes.map(h => h.zMm));
-    let bestLayer = null, bestDist = Infinity;
-    for (const [layer, pts] of Object.entries(layerCoords)) {
-        const vals = hasFN ? pts.map(p => p.y) : pts.map(p => p.z);
-        const dist = Math.abs(median(vals) - holeMedian);
-        if (dist < bestDist) { bestDist = dist; bestLayer = layer; }
-    }
-    return bestLayer;
-}
-
 // Detects the axis that separates the F/N (or T/B) face layers in global coordinates.
 // Uses the spread of face-layer median positions — no dependence on cageAxisName.
 //   Wall with faces in X (e.g. P7349, runs in Y): xSpread >> ySpread → 'x'
