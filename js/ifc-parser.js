@@ -264,12 +264,11 @@ class IFCParser {
 
     // ── IFCBEAM coupler head extraction ───────────────────────────────
     /**
-     * Extracts IFCBEAM coupler head entities and their Avonmouth layer + weight.
-     * Returns Map<expressID (int), { eid, layer, atkLayerName, weight }>
+     * Extracts IFCBEAM coupler head entities and their Avonmouth layer assignment.
+     * Returns Map<expressID (int), { eid, layer, atkLayerName }>
      *
      * IFCBEAM entities carry the same Avonmouth pset as their rebar:
      *   Avonmouth.Layer/Set → e.g. 'F1A'
-     *   ATK Couplers Parts.Coupler weight → e.g. 1.76 (kg)
      */
     extractCouplerHeads(lines) {
         const couplerMap = new Map();
