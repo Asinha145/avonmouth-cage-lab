@@ -32,6 +32,7 @@ class Viewer3D {
         this._useOrtho    = false;
         this._datumMarker       = null;
         this._layerDatumMarkers = [];
+        this._plateBoxes        = [];
         this.renderer           = null;
         this.ifcapi      = null;
 
@@ -120,6 +121,8 @@ class Viewer3D {
         lights.forEach(l => this.scene.add(l));
         this.layerGroups.clear();
         this.meshByExpId.clear();
+        this._plateBoxes = [];
+        this._layerDatumMarkers = [];
 
         // Reset bboxes
         const _emptyBbox = () => ({
@@ -460,7 +463,9 @@ class Viewer3D {
     _sceneSize() {
         const box = new THREE.Box3();
         this.scene.traverse(o => {
-            if (o.isMesh && o !== this._datumMarker && !(this._layerDatumMarkers || []).includes(o))
+            if (o.isMesh && o !== this._datumMarker &&
+                    !(this._layerDatumMarkers || []).includes(o) &&
+                    !(this._plateBoxes || []).includes(o))
                 box.expandByObject(o);
         });
         return box.isEmpty() ? 1 : box.getSize(new THREE.Vector3()).length();
@@ -487,6 +492,32 @@ class Viewer3D {
         }
         console.log(`[Viewer3D] ${markers.length} layer datum markers placed:`,
             markers.map(m => m.layer).join(', '));
+    }
+
+    // Place coupler plates as semi-transparent 10mm-thick boxes in the scene.
+    // boxes: [{ cx,cy,cz,sx,sy,sz,type,face }] — engine coords (metres), sizes in metres.
+    // VS plates: blue (0x2255cc), HS plates: cyan (0x22aacc), both 50% opacity.
+    setPlateBoxes(boxes) {
+        for (const m of this._plateBoxes || []) this.scene.remove(m);
+        this._plateBoxes = [];
+        if (!boxes || !boxes.length) return;
+
+        const matVS = new THREE.MeshPhongMaterial({ color: 0x2255cc, transparent: true, opacity: 0.5, side: THREE.DoubleSide });
+        const matHS = new THREE.MeshPhongMaterial({ color: 0x22aacc, transparent: true, opacity: 0.5, side: THREE.DoubleSide });
+
+        for (const b of boxes) {
+            const geo  = new THREE.BoxGeometry(b.sx, b.sy, b.sz);
+            const mat  = b.type === 'HS' ? matHS : matVS;
+            const mesh = new THREE.Mesh(geo, mat);
+            mesh.position.set(b.cx, b.cy, b.cz);
+            mesh.userData.plateType = b.type;
+            mesh.userData.face      = b.face;
+            this.scene.add(mesh);
+            this._plateBoxes.push(mesh);
+        }
+        const nVS = boxes.filter(b => b.type === 'VS').length;
+        const nHS = boxes.filter(b => b.type === 'HS').length;
+        console.log(`[Viewer3D] ${boxes.length} plate boxes placed (${nVS} VS blue, ${nHS} HS cyan)`);
     }
 
     _applyOrbit() {
