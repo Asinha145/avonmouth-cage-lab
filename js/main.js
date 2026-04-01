@@ -252,7 +252,8 @@ function displayResults(parser) {
 
     // Rejection banner
     const banner   = document.getElementById('rejection-banner');
-    const rejected = parser.isRejected;
+    const diagonal = _isCageDiagonal();
+    const rejected = parser.isRejected || diagonal;
     if (rejected) {
         const reasons = [];
         if (parser.unknownCount > 0)
@@ -263,6 +264,8 @@ function displayResults(parser) {
             reasons.push(`${parser.duplicateCount} duplicate GlobalId${parser.duplicateCount > 1 ? 's' : ''}`);
         if (parser.missingWeightCount > 0)
             reasons.push(`${parser.missingWeightCount} bar${parser.missingWeightCount > 1 ? 's' : ''} missing ATK/ICOS Weight`);
+        if (diagonal)
+            reasons.push('Cage face layers are not aligned to IFC X, Y, or Z axis — diagonal installation cannot be processed');
         document.getElementById('rejection-reasons').innerHTML =
             reasons.map(r => `<li>${r}</li>`).join('');
         banner.classList.remove('hidden');
@@ -1563,6 +1566,39 @@ function _detectFaceSepAxis() {
         return vals.length >= 2 ? vals[vals.length-1] - vals[0] : 0;
     }));
     return maxRange('x') < maxRange('y') ? 'x' : 'y';
+}
+
+// Returns true if wall cage face layers are not aligned to any single IFC axis.
+// For an axis-aligned cage, bars in each face layer cluster tightly on the sep axis
+// (e.g. all F1A bars at IFC-X ≈ 1,979,345 ± 50mm) and spread wide on the length axis.
+// For a diagonal cage, both X and Y show a large within-layer range — neither is "tight".
+// Threshold: min(xMaxRange, yMaxRange) > 500mm → diagonal.
+//   Axis-aligned: tight axis ≈ 50–200mm (one bar diameter + installation tolerance)
+//   Diagonal 45°: tight axis ≈ wall_length / √2 → thousands of mm
+// Slab cages (T/B only, no F/N) are excluded — diagonal slab is out of scope.
+function _isCageDiagonal() {
+    const hasFN = allData.some(b => b.Avonmouth_Layer_Set && /^[FN]\d/i.test(b.Avonmouth_Layer_Set));
+    if (!hasFN) return false;   // slab — not checked here
+
+    const layerCoords = {};
+    for (const bar of allData) {
+        const layer = bar.Avonmouth_Layer_Set;
+        if (!layer || !/^[FN]\d/i.test(layer)) continue;
+        const x = bar.Start_X ?? bar.End_X;
+        const y = bar.Start_Y ?? bar.End_Y;
+        if (x == null && y == null) continue;
+        if (!layerCoords[layer]) layerCoords[layer] = [];
+        layerCoords[layer].push({ x, y });
+    }
+    const layers = Object.values(layerCoords);
+    if (!layers.length) return false;
+
+    const maxRange = key => Math.max(...layers.map(pts => {
+        const vals = pts.map(p => p[key]).filter(v => v != null).sort((a, b) => a - b);
+        return vals.length >= 2 ? vals[vals.length - 1] - vals[0] : 0;
+    }));
+
+    return Math.min(maxRange('x'), maxRange('y')) > 500;
 }
 
 // Assigns every hole to its nearest mesh face layer (F1A/N1A or T1A/B1A) by proximity.
