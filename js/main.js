@@ -198,6 +198,7 @@ async function processFile() {
                     if (dims) _updateDimBoxesFromBREP(dims);
                     _buildViewerCheckboxes();
                     window._viewer3d.setLayerDatumMarkers(_computeLayerDatums());
+                    window._viewer3d.setPlateBoxes(_computePlate3DBoxes());
                     // Enable face view DXF buttons now that BREP geometry is loaded
                     const faceBtn = document.getElementById('export-face-dxf-btn');
                     if (faceBtn) { faceBtn.disabled = false; faceBtn.title = ''; }
@@ -342,7 +343,10 @@ function displayResults(parser) {
     if (reportBtn) reportBtn.classList.toggle('hidden', rejected);
 
     const templateDxfBtn = document.getElementById('export-template-dxf-btn');
-    if (templateDxfBtn) templateDxfBtn.classList.remove('hidden');
+    if (templateDxfBtn) {
+        const hasVSHS = [..._couplerMap.values()].some(c => /^(VS|HS)/i.test(c.layer || ''));
+        templateDxfBtn.classList.toggle('hidden', !hasVSHS || rejected);
+    }
 
     // Populate face-view dropdown and show section
     const faceLayers = [...new Set(
@@ -1814,6 +1818,76 @@ function _computeLayerDatums() {
         results.push({ layer, ex, ey, ez });
     }
     return results;
+}
+
+// Computes coupler plates as 3D box descriptors for the BREP viewer.
+// Uses the same px/pz hole coordinate logic as exportCombinedFaceDXF so plates
+// land exactly on the face surfaces rendered by the BREP geometry.
+// Returns [{ cx,cy,cz,sx,sy,sz,type,face }] in engine coords (metres).
+function _computePlate3DBoxes() {
+    if (!_rawIfcText || !allData.length) return [];
+    const allHoles = _parseIFCBeamHoles(_rawIfcText);
+    if (!allHoles.length) return [];
+
+    const faceBuckets = _bucketHolesByFace(allHoles);
+    const sepAxis     = _detectFaceSepAxis();
+    const { datumPx, datumPz } = _cageDatum();
+    const THICK = 10 / 1000; // 10 mm in engine units (metres)
+
+    const boxes = [];
+    for (const [faceName, faceHoles] of Object.entries(faceBuckets)) {
+        if (!faceHoles.length) continue;
+
+        // Replicate the px/pz mapping used in exportCombinedFaceDXF
+        const zSpan   = Math.max(...faceHoles.map(h => h.zMm)) - Math.min(...faceHoles.map(h => h.zMm));
+        const useY    = zSpan < 100;                          // slab: face plane = X-Y
+        const useLongY = sepAxis === 'x' && !useY;           // wall sepAxis=x: length runs in IFC-Y
+
+        const plotHoles = faceHoles.map(h => ({
+            ...h,
+            px: useLongY ? h.yMm - datumPx : h.xMm - datumPx,
+            pz: (useY   ? h.yMm : h.zMm)  - datumPz,
+        }));
+
+        const { vsPlates, hsPlates } = _computePlates(plotHoles, 2000, 300);
+
+        // Face plane constant coordinate (IFC-X for sepAxis=x, IFC-Y for y, IFC-Z for z)
+        const faceAxisChar = sepAxis === 'x' ? 'X' : sepAxis === 'y' ? 'Y' : 'Z';
+        const faceBars = allData.filter(b => b.Avonmouth_Layer_Set === faceName);
+        const faceVals = faceBars.flatMap(b => [b[`Start_${faceAxisChar}`], b[`End_${faceAxisChar}`]]).filter(v => v != null);
+        const faceCoord = faceVals.length ? faceVals.reduce((s, v) => s + v, 0) / faceVals.length : 0;
+
+        for (const plate of [...vsPlates, ...hsPlates]) {
+            const pxMid  = (plate.minX + plate.maxX) / 2;
+            const pzMid  = (plate.minZ + plate.maxZ) / 2;
+            const pxSize = plate.maxX - plate.minX;
+            const pzSize = plate.maxZ - plate.minZ;
+
+            // Convert face-2D (px,pz) → engine 3D (ex=IFC-X/1000, ey=IFC-Z/1000, ez=-IFC-Y/1000)
+            let cx, cy, cz, sx, sy, sz;
+            if (sepAxis === 'x') {
+                // px = IFC-Y − datumPx → engine-z = -(datumPx + px)/1000
+                // pz = IFC-Z − datumPz → engine-y =  (datumPz + pz)/1000
+                cx = faceCoord / 1000;              sy = pzSize / 1000;
+                cy = (datumPz + pzMid) / 1000;      sz = pxSize / 1000;
+                cz = -(datumPx + pxMid) / 1000;     sx = THICK;
+            } else if (sepAxis === 'y') {
+                // px = IFC-X − datumPx → engine-x =  (datumPx + px)/1000
+                // pz = IFC-Z − datumPz → engine-y =  (datumPz + pz)/1000
+                cx = (datumPx + pxMid) / 1000;      sx = pxSize / 1000;
+                cy = (datumPz + pzMid) / 1000;      sy = pzSize / 1000;
+                cz = -faceCoord / 1000;              sz = THICK;
+            } else {
+                // slab (sepAxis='z'): px = IFC-X, pz = IFC-Y
+                cx = (datumPx + pxMid) / 1000;      sx = pxSize / 1000;
+                cy = faceCoord / 1000;               sy = THICK;
+                cz = -(datumPz + pzMid) / 1000;     sz = pzSize / 1000;
+            }
+
+            boxes.push({ cx, cy, cz, sx, sy, sz, type: plate.type, face: faceName });
+        }
+    }
+    return boxes;
 }
 
 function exportFaceViewDXF(faceLayerName) {
