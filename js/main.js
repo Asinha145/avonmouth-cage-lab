@@ -68,10 +68,14 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     document.getElementById('search-input').addEventListener('input', applyFilters);
     document.getElementById('bartype-filter').addEventListener('change', applyFilters);
-    document.getElementById('datum-side-select').addEventListener('change', e => {
+    const _refreshDatumMarkers = () => {
         if (!window._viewer3d || !allData.length) return;
-        window._viewer3d.setLayerDatumMarkers(_computeLayerDatums(e.target.value));
-    });
+        const datumSide  = document.getElementById('datum-side-select')?.value  || 'left';
+        const heightSide = document.getElementById('slab-face-select')?.value || 'top';
+        window._viewer3d.setLayerDatumMarkers(_computeLayerDatums(datumSide, heightSide));
+    };
+    document.getElementById('datum-side-select').addEventListener('change', _refreshDatumMarkers);
+    document.getElementById('slab-face-select').addEventListener('change', _refreshDatumMarkers);
     document.getElementById('export-excel-btn').addEventListener('click', () => exportXLSX());
     document.getElementById('export-ubars-btn').addEventListener('click',  () => exportEDB('ubars'));
     document.getElementById('export-struts-btn').addEventListener('click', () => exportEDB('struts'));
@@ -201,8 +205,9 @@ async function processFile() {
                     const dims = await window._viewer3d.loadIFC(arrayBuffer, barMap, cageAxisName, _couplerMap);
                     if (dims) _updateDimBoxesFromBREP(dims);
                     _buildViewerCheckboxes();
-                    const datumSide = document.getElementById('datum-side-select')?.value || 'left';
-                    window._viewer3d.setLayerDatumMarkers(_computeLayerDatums(datumSide));
+                    const datumSide  = document.getElementById('datum-side-select')?.value  || 'left';
+                    const heightSide = document.getElementById('slab-face-select')?.value || 'top';
+                    window._viewer3d.setLayerDatumMarkers(_computeLayerDatums(datumSide, heightSide));
                     window._viewer3d.setPlateBoxes(_computePlate3DBoxes());
                     // Enable face view DXF buttons now that BREP geometry is loaded
                     const faceBtn = document.getElementById('export-face-dxf-btn');
@@ -374,6 +379,18 @@ function displayResults(parser) {
     if (datumSideCtrl) datumSideCtrl.classList.remove('hidden');
     const datumSideSelect = document.getElementById('datum-side-select');
     if (datumSideSelect) datumSideSelect.value = _detectDatumSide();
+
+    // Slab face control — only for slab cages (T/B layers, sepAxis='z')
+    const slabFaceCtrl = document.getElementById('slab-face-control');
+    const slabFaceSelect = document.getElementById('slab-face-select');
+    if (slabFaceCtrl) {
+        if (_detectFaceSepAxis() === 'z') {
+            slabFaceCtrl.classList.remove('hidden');
+            if (slabFaceSelect) slabFaceSelect.value = _detectSlabFace();
+        } else {
+            slabFaceCtrl.classList.add('hidden');
+        }
+    }
 
     autoFillEDBInputs();
     _renderPRLPRCResults(prlPrcResult);
@@ -1719,6 +1736,21 @@ function _cageDatum() {
 // Slab cages (sepAxis='z'):
 //   T1A is the top face (higher IFC-Z). Viewed from above in standard
 //   plan orientation (north up), min IFC-X = LEFT.
+// Auto-detects Top/Bottom for slab cages by comparing avg IFC-Z of T1A vs B1A bars.
+// T1A (higher IFC-Z) = Top, B1A (lower IFC-Z) = Bottom.
+// Returns 'top' or 'bottom'. Only meaningful when sepAxis='z'.
+function _detectSlabFace() {
+    const avgZ = layer => {
+        const bars = allData.filter(b => b.Avonmouth_Layer_Set && b.Avonmouth_Layer_Set.toUpperCase() === layer);
+        const vals = bars.flatMap(b => [b.Start_Z, b.End_Z]).filter(v => v != null);
+        return vals.length ? vals.reduce((s, v) => s + v, 0) / vals.length : null;
+    };
+    const t1aZ = avgZ('T1A');
+    const b1aZ = avgZ('B1A');
+    if (t1aZ == null || b1aZ == null) return 'top'; // fallback
+    return t1aZ > b1aZ ? 'top' : 'bottom';
+}
+
 function _detectDatumSide() {
     const sepAxis = _detectFaceSepAxis();
 
@@ -1750,15 +1782,19 @@ function _detectDatumSide() {
     }
 }
 
-function _computeLayerDatums(datumSide = 'left') {
-    // Includes slab T/B layers in addition to wall F/N layers
+function _computeLayerDatums(datumSide = 'left', heightSide = 'top') {
+    // Includes slab T/B layers in addition to wall F/N layers.
+    // For slab cages (sepAxis='z'), heightSide filters to T-layers ('top') or B-layers ('bottom').
     const faceLayerRe = /^[FNTB]\d+A$/i;
-    const layers = [...new Set(
+    const sepAxis = _detectFaceSepAxis();
+    const allLayers = [...new Set(
         allData.filter(b => b.Avonmouth_Layer_Set && faceLayerRe.test(b.Avonmouth_Layer_Set))
                .map(b => b.Avonmouth_Layer_Set)
     )];
+    const layers = sepAxis === 'z'
+        ? allLayers.filter(l => heightSide === 'top' ? /^T/i.test(l) : /^B/i.test(l))
+        : allLayers;
 
-    const sepAxis = _detectFaceSepAxis();
 
     // Helper: median of an array
     const median = arr => {

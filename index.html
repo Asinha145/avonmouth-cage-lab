@@ -264,6 +264,16 @@
                 <span class="datum-side-hint">Layer datum markers move to the selected end · Main datum stays fixed</span>
             </div>
 
+            <!-- Slab face control (shown only for slab/roof cages) -->
+            <div class="datum-side-control hidden" id="slab-face-control">
+                <span class="datum-side-label">Slab Face</span>
+                <select id="slab-face-select">
+                    <option value="top">Top (T1A)</option>
+                    <option value="bottom">Bottom (B1A)</option>
+                </select>
+                <span class="datum-side-hint">Select which slab face the layer datum sits on · detected from IFC-Z</span>
+            </div>
+
             <!-- Top stat cards -->
             <div class="stats-grid">
                 <div class="stat-card">
