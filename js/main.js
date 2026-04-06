@@ -1982,6 +1982,87 @@ function _computePlate3DBoxes() {
     return boxes;
 }
 
+// Returns the closest endpoint (in px/pz plot space) of the VS and HS datum bars
+// for a given face layer. These endpoints are the reference for the template dimensions.
+//
+// vBarEndPz: endpoint of the VS datum bar closest to the datum crossing, in pz coords
+// hBarEndPx: endpoint of the HS datum bar closest to the datum crossing, in px coords
+//
+// Mirrors the bar-selection logic of _computeLayerDatums exactly.
+function _getDatumBarEnds(faceName, datumSide, heightSide, faceSepAxis, useLongY, useY, globalDatumPx, globalDatumPz) {
+    const bars = allData.filter(b => b.Avonmouth_Layer_Set === faceName);
+    if (!bars.length) return null;
+
+    const mid = (b, axis) => {
+        if (axis === 'X') return ((b.Start_X ?? 0) + (b.End_X ?? 0)) / 2;
+        if (axis === 'Y') return ((b.Start_Y ?? 0) + (b.End_Y ?? 0)) / 2;
+        return ((b.Start_Z ?? 0) + (b.End_Z ?? 0)) / 2;
+    };
+    const median = arr => {
+        if (!arr.length) return 0;
+        const s = [...arr].sort((a, b) => a - b);
+        const m = Math.floor(s.length / 2);
+        return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+    };
+
+    let vRaw, hRaw, vPosFn, hPosFn;
+    if (faceSepAxis === 'z') {
+        vRaw   = bars.filter(b => Math.abs(b.Dir_Y ?? 0) > Math.abs(b.Dir_X ?? 0));
+        hRaw   = bars.filter(b => Math.abs(b.Dir_X ?? 0) > Math.abs(b.Dir_Y ?? 0));
+        vPosFn = b => mid(b, 'X');
+        hPosFn = b => mid(b, 'Y');
+    } else {
+        vRaw   = bars.filter(b => b.Orientation === 'Vertical');
+        hRaw   = bars.filter(b => b.Orientation === 'Horizontal');
+        vPosFn = b => faceSepAxis === 'x' ? mid(b, 'Y') : mid(b, 'X');
+        hPosFn = b => mid(b, 'Z');
+    }
+    if (!vRaw.length || !hRaw.length) return null;
+
+    const vMed = median(vRaw.map(b => b.Length ?? 0));
+    const hMed = median(hRaw.map(b => b.Length ?? 0));
+    const vBars = vRaw.filter(b => (b.Length ?? 0) >= vMed * 0.5);
+    const hBars = hRaw.filter(b => (b.Length ?? 0) >= hMed * 0.5);
+    if (!vBars.length || !hBars.length) return null;
+
+    // Same selection as _computeLayerDatums
+    const vDatum = datumSide === 'right'
+        ? vBars.reduce((best, b) => vPosFn(b) > vPosFn(best) ? b : best)
+        : vBars.reduce((best, b) => vPosFn(b) < vPosFn(best) ? b : best);
+    const hDatum = heightSide === 'top'
+        ? hBars.reduce((best, b) => hPosFn(b) > hPosFn(best) ? b : best)
+        : hBars.reduce((best, b) => hPosFn(b) < hPosFn(best) ? b : best);
+
+    const vsPos = vPosFn(vDatum);   // VS bar constant position (length axis)
+    const hsPos = hPosFn(hDatum);   // HS bar constant position (height axis)
+
+    // VS bar runs along the height (pz) direction.
+    // Find the endpoint of vDatum closest to the datum crossing height (hsPos).
+    const vPzOf = b => {
+        if (faceSepAxis === 'z') return useY ? [b.Start_Y ?? 0, b.End_Y ?? 0] : [b.Start_Z ?? 0, b.End_Z ?? 0];
+        return [b.Start_Z ?? 0, b.End_Z ?? 0]; // wall: VS bar runs in IFC-Z
+    };
+    const [vz1, vz2] = vPzOf(vDatum);
+    // hsPosIFC is what vz1/vz2 are compared against in the same IFC axis
+    const hsPosIFC = hsPos; // hPosFn already returns IFC coords in that axis
+    const vCloser  = Math.abs(vz1 - hsPosIFC) <= Math.abs(vz2 - hsPosIFC) ? vz1 : vz2;
+    const vBarEndPz = vCloser - globalDatumPz;
+
+    // HS bar runs along the length (px) direction.
+    // Find the endpoint of hDatum closest to the datum crossing position (vsPos).
+    const hPxOf = b => {
+        if (useLongY) return [b.Start_Y ?? 0, b.End_Y ?? 0]; // sepAxis='x', length in IFC-Y
+        return [b.Start_X ?? 0, b.End_X ?? 0];               // length in IFC-X
+    };
+    const [hx1, hx2] = hPxOf(hDatum);
+    // vsPosIFC for hs endpoint comparison
+    const vsPosIFC = useLongY ? vsPos : vsPos; // vsPos is already in the right axis
+    const hCloser  = Math.abs(hx1 - vsPosIFC) <= Math.abs(hx2 - vsPosIFC) ? hx1 : hx2;
+    const hBarEndPx = hCloser - globalDatumPx;
+
+    return { hBarEndPx, vBarEndPz };
+}
+
 function exportFaceViewDXF(faceLayerName) {
     if (!allData.length) { alert('No cage data loaded.'); return; }
 
@@ -2469,8 +2550,70 @@ async function exportCombinedFaceDXF() {
     }
 }
 
+// Pure-JS minimal ZIP builder (stored, no compression).
+// files = [{ name: string, content: string }]
+// Returns a Blob of type application/zip.
+function buildZip(files) {
+    const crc32tbl = (() => {
+        const t = new Uint32Array(256);
+        for (let i = 0; i < 256; i++) {
+            let c = i;
+            for (let j = 0; j < 8; j++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+            t[i] = c;
+        }
+        return t;
+    })();
+    const crc32 = data => {
+        let c = 0xFFFFFFFF;
+        for (const b of data) c = crc32tbl[(c ^ b) & 0xFF] ^ (c >>> 8);
+        return (c ^ 0xFFFFFFFF) >>> 0;
+    };
+    const enc = new TextEncoder();
+    const localParts = [], cdParts = [];
+    let offset = 0;
+    for (const { name, content } of files) {
+        const nameB = enc.encode(name);
+        const dataB = enc.encode(content);
+        const crc   = crc32(dataB);
+        const sz    = dataB.length;
+        const lh = new Uint8Array(30 + nameB.length);
+        const lv = new DataView(lh.buffer);
+        lv.setUint32(0, 0x04034b50, true); lv.setUint16(4, 20, true);
+        lv.setUint16(6, 0, true);          lv.setUint16(8, 0, true);  // stored
+        lv.setUint16(10, 0, true);         lv.setUint16(12, 0, true);
+        lv.setUint32(14, crc, true);       lv.setUint32(18, sz, true); lv.setUint32(22, sz, true);
+        lv.setUint16(26, nameB.length, true); lv.setUint16(28, 0, true);
+        lh.set(nameB, 30);
+        localParts.push(lh, dataB);
+        const cd = new Uint8Array(46 + nameB.length);
+        const cv = new DataView(cd.buffer);
+        cv.setUint32(0, 0x02014b50, true); cv.setUint16(4, 20, true);  cv.setUint16(6, 20, true);
+        cv.setUint16(8, 0, true);          cv.setUint16(10, 0, true);
+        cv.setUint16(12, 0, true);         cv.setUint16(14, 0, true);
+        cv.setUint32(16, crc, true);       cv.setUint32(20, sz, true); cv.setUint32(24, sz, true);
+        cv.setUint16(28, nameB.length, true); cv.setUint16(30, 0, true); cv.setUint16(32, 0, true);
+        cv.setUint16(34, 0, true);         cv.setUint16(36, 0, true);
+        cv.setUint32(38, 0, true);         cv.setUint32(42, offset, true);
+        cd.set(nameB, 46);
+        cdParts.push(cd);
+        offset += lh.length + dataB.length;
+    }
+    const cdSize = cdParts.reduce((s, c) => s + c.length, 0);
+    const eocd = new Uint8Array(22);
+    const ev = new DataView(eocd.buffer);
+    ev.setUint32(0, 0x06054b50, true);   ev.setUint16(4, 0, true); ev.setUint16(6, 0, true);
+    ev.setUint16(8, files.length, true); ev.setUint16(10, files.length, true);
+    ev.setUint32(12, cdSize, true);      ev.setUint32(16, offset, true); ev.setUint16(20, 0, true);
+    const all = [...localParts, ...cdParts, eocd];
+    const total = all.reduce((s, a) => s + a.length, 0);
+    const out = new Uint8Array(total);
+    let pos = 0;
+    for (const a of all) { out.set(a, pos); pos += a.length; }
+    return new Blob([out], { type: 'application/zip' });
+}
+
 async function exportTemplateDXF(maxLength, maxWidth) {
-    const btn = document.getElementById('export-template-dxf-btn');
+    const btn  = document.getElementById('export-template-dxf-btn');
     const orig = btn.textContent;
     const yield_ = () => new Promise(r => setTimeout(r, 0));
     btn.textContent = 'Generating…'; btn.disabled = true;
@@ -2483,117 +2626,93 @@ async function exportTemplateDXF(maxLength, maxWidth) {
         const allHoles = _parseIFCBeamHoles(_rawIfcText);
         if (!allHoles.length) throw new Error('No VS/HS strut coupler holes found in this IFC.');
 
-        console.log(`[DXF] cageAxisName=${cageAxisName} | holes=${allHoles.length}`);
         updateProgress(55, `Found ${allHoles.length} VS/HS holes — bucketing by face…`);
         await yield_();
 
-        // Bucket holes by face (F1A/N1A or T1A/B1A) using proximity to face layer bar positions
-        const faceBuckets = _bucketHolesByFace(allHoles);
-        // Shared datum from face bar centreline endpoints — same origin as exportFaceViewDXF
-        // so both DXFs overlay exactly when placed in the same AutoCAD drawing.
+        const faceBuckets   = _bucketHolesByFace(allHoles);
         const { datumPx: globalDatumPx, datumPz: globalDatumPz } = _cageDatum();
+        const faceSepAxis   = _detectFaceSepAxis();
+
+        // UI fields for naming + datum bar end detection
+        const fileEl   = document.getElementById('ifc-file');
+        const fname    = fileEl?.files[0]?.name || 'CAGE';
+        const prodNum  = document.getElementById('production-number')?.value?.trim() || '';
+        const cageRef  = document.getElementById('cage-reference')?.value?.trim() || fname.replace(/\.[^.]+$/, '');
+        const datumSide   = document.getElementById('datum-side-select')?.value  || 'left';
+        const heightSide  = document.getElementById('slab-face-select')?.value  || 'bottom';
+        const suffix   = maxLength === 2000 ? 'prod' : 'test';
 
         updateProgress(70, 'Computing plates…');
         await yield_();
 
-        const fileEl  = document.getElementById('ifc-file');
-        const fname   = fileEl?.files[0]?.name || 'CAGE';
-        const cageRef = fname.replace(/\.[^.]+$/, '');
-        const suffix  = maxLength === 2000 ? 'prod' : 'test';
-
-        const dxf  = [];
-        const emit = (...v) => v.forEach(x => dxf.push(String(x)));
-        const LINE   = (x1,y1,x2,y2,lyr) => emit('0','LINE','8',lyr,'10',x1.toFixed(1),'20',y1.toFixed(1),'30','0.0','11',x2.toFixed(1),'21',y2.toFixed(1),'31','0.0');
-        const CIRCLE = (cx,cy,r,lyr)     => emit('0','CIRCLE','8',lyr,'10',cx.toFixed(1),'20',cy.toFixed(1),'30','0.0','40',r.toFixed(2));
-        const TEXT   = (x,y,txt,h,lyr)   => emit('0','TEXT','8',lyr,'10',x.toFixed(1),'20',y.toFixed(1),'30','0.0','40',h.toFixed(1),'1',String(txt));
-        const HDIM = (x0, x1, y, label) => {
-            LINE(x0, y, x1, y, 'DIMS'); LINE(x0, y-4, x0, y+4, 'DIMS'); LINE(x1, y-4, x1, y+4, 'DIMS');
-            TEXT((x0+x1)/2 - 4, y+5, String(label), 7, 'DIMS');
+        // ── DXF builder helpers ──────────────────────────────────────────────
+        // Returns DXF HEADER + TABLES (LAYER colour defs + STYLE for Arial font).
+        const makeDXFHeader = emit => {
+            emit('0','SECTION','2','HEADER',
+                 '9','$ACADVER','1','AC1009',
+                 '9','$TEXTSTYLE','7','ARIAL',
+                 '0','ENDSEC');
+            emit('0','SECTION','2','TABLES');
+            // STYLE table — Arial font
+            emit('0','TABLE','2','STYLE','70','1');
+            emit('0','STYLE','2','ARIAL','70','0','40','0.0','41','1.0','50','0.0','71','0','42','0.0','3','arial.ttf','4','');
+            emit('0','ENDTAB');
+            // LAYER table
+            emit('0','TABLE','2','LAYER','70','5');
+            // PLATE_OUTLINE: color 1 = red (prints red)
+            emit('0','LAYER','2','PLATE_OUTLINE','70','0','62','1','6','CONTINUOUS');
+            // TEXT, DIMS, HOLES, SCREW_HOLES: color 7 = white in DWG, black on print
+            emit('0','LAYER','2','TEXT','70','0','62','7','6','CONTINUOUS');
+            emit('0','LAYER','2','DIMS','70','0','62','7','6','CONTINUOUS');
+            emit('0','LAYER','2','HOLES','70','0','62','7','6','CONTINUOUS');
+            emit('0','LAYER','2','SCREW_HOLES','70','0','62','7','6','CONTINUOUS');
+            emit('0','ENDTAB');
+            emit('0','ENDSEC');
+            emit('0','SECTION','2','ENTITIES');
         };
-        const VDIM = (x, z0, z1, label) => {
-            LINE(x, z0, x, z1, 'DIMS'); LINE(x-4, z0, x+4, z0, 'DIMS'); LINE(x-4, z1, x+4, z1, 'DIMS');
-            TEXT(x+5, (z0+z1)/2, String(label), 7, 'DIMS');
-        };
 
+        // ── Per-face DXF generation ──────────────────────────────────────────
         updateProgress(85, 'Building DXF…');
         await yield_();
 
-        emit('0','SECTION','2','HEADER','9','$ACADVER','1','AC1009','0','ENDSEC');
-        emit('0','SECTION','2','ENTITIES');
+        const faceDXFs = [];  // [{name, content}]
 
-        const COL_MARGIN = 80, DRAW_PAD = 50, PLATE_GAP = 70, LABEL_H = 22;
-        let baseY = DRAW_PAD;
-
-        const drawPlates = (plates, sectionLabel) => {
-            if (!plates.length) return;
-            // Section header
-            TEXT(COL_MARGIN, baseY, `── ${sectionLabel} ──  (${plates.length} plates)`, 13, 'TEXT');
-            baseY += 30;
-
-            for (const plate of plates) {
-                const ox = COL_MARGIN, oz = baseY;
-
-                // Plate outline
-                LINE(ox,              oz,              ox+plate.length, oz,              'PLATE_OUTLINE');
-                LINE(ox+plate.length, oz,              ox+plate.length, oz+plate.width,  'PLATE_OUTLINE');
-                LINE(ox+plate.length, oz+plate.width,  ox,             oz+plate.width,  'PLATE_OUTLINE');
-                LINE(ox,              oz+plate.width,  ox,             oz,              'PLATE_OUTLINE');
-
-                // Plate label above
-                TEXT(ox, oz+plate.width+6,
-                    `${plate.type}-PLATE-${String(plate.id).padStart(2,'0')}  ${Math.round(plate.length)} x ${Math.round(plate.width)} mm  (${plate.holes.length} holes)`,
-                    10, 'TEXT');
-
-                // Overall dimensions
-                HDIM(ox, ox+plate.length, oz-20, `${Math.round(plate.length)} mm`);
-                VDIM(ox-20, oz, oz+plate.width, `${Math.round(plate.width)} mm`);
-
-                // Holes
-                for (const h of plate.holes) {
-                    const hx = ox + (h.px - plate.minX);
-                    const hz = oz + (h.pz - plate.minZ);
-                    const r  = h.holeDia / 2;
-                    CIRCLE(hx, hz, r, 'HOLES');
-                    TEXT(hx-r, hz+r+3, `${cageRef}-CPLR-${String(h.num).padStart(3,'0')}`, 6, 'TEXT');
-                }
-
-                // 25mm clearance dims at all four edges
-                const byPx = [...plate.holes].sort((a, b) => a.px - b.px);
-                const byPz = [...plate.holes].sort((a, b) => a.pz - b.pz);
-                const lH = byPx[0], rH = byPx[byPx.length-1];
-                const bH = byPz[0], tH = byPz[byPz.length-1];
-                const lhx = ox+(lH.px-plate.minX), lhz = oz+(lH.pz-plate.minZ);
-                const rhx = ox+(rH.px-plate.minX), rhz = oz+(rH.pz-plate.minZ);
-                const bhx = ox+(bH.px-plate.minX), bhz = oz+(bH.pz-plate.minZ);
-                const thx = ox+(tH.px-plate.minX), thz = oz+(tH.pz-plate.minZ);
-                HDIM(ox,              lhx-lH.holeDia/2, lhz, '25');
-                HDIM(rhx+rH.holeDia/2, ox+plate.length, rhz, '25');
-                VDIM(bhx, oz,              bhz-bH.holeDia/2, '25');
-                VDIM(thx, thz+tH.holeDia/2, oz+plate.width,  '25');
-
-                baseY += plate.width + DRAW_PAD + PLATE_GAP + LABEL_H;
-            }
-            baseY += 20; // extra gap between VS and HS sections
-        };
-
-        // Draw one section per face
-        // Face separation axis tells us which IFC axis the holes spread along for px.
-        // sepAxis='x' → faces in X → length is in Y → useLongY=true for wall faces
-        // sepAxis='y' → faces in Y → length is in X → useLongY=false
-        const faceSepAxis = _detectFaceSepAxis();
-        let totalPlates = 0, totalVS = 0, totalHS = 0;
         for (const [faceName, faceHoles] of Object.entries(faceBuckets)) {
-            // Detect face plane per face group
-            const faceZ = faceHoles.map(h => h.zMm);
-            const zSpan = Math.max(...faceZ) - Math.min(...faceZ);
-            const useY  = zSpan < 100;
+            const dxf  = [];
+            const emit = (...v) => v.forEach(x => dxf.push(String(x)));
 
-            // px follows cage length axis (perpendicular to face separation axis):
-            //   faceSepAxis='x' → faces separated in X → length runs in Y → use yMm
-            //   faceSepAxis='y' → faces separated in Y → length runs in X → use xMm
-            //   slab (useY=true) → always xMm (useY already handles pz from yMm)
+            // ── Primitives ───────────────────────────────────────────────────
+            const LINE = (x1,y1,x2,y2,lyr) =>
+                emit('0','LINE','8',lyr,
+                     '10',x1.toFixed(1),'20',y1.toFixed(1),'30','0.0',
+                     '11',x2.toFixed(1),'21',y2.toFixed(1),'31','0.0');
+            const CIRCLE = (cx,cy,r,lyr) =>
+                emit('0','CIRCLE','8',lyr,
+                     '10',cx.toFixed(1),'20',cy.toFixed(1),'30','0.0','40',r.toFixed(2));
+            // TEXT with optional rotation (deg) and style
+            const TEXT = (x,y,txt,h,lyr,rot=0) =>
+                emit('0','TEXT','8',lyr,
+                     '10',x.toFixed(1),'20',y.toFixed(1),'30','0.0',
+                     '40',h.toFixed(2),'1',String(txt),
+                     '50',rot.toFixed(1),'7','ARIAL');
+            // Dimension helpers
+            const HDIM = (x0, x1, y, label) => {
+                LINE(x0, y, x1, y, 'DIMS');
+                LINE(x0, y-4, x0, y+4, 'DIMS'); LINE(x1, y-4, x1, y+4, 'DIMS');
+                TEXT((x0+x1)/2, y+5, String(label), 6, 'DIMS');
+            };
+            const VDIM = (x, z0, z1, label) => {
+                LINE(x, z0, x, z1, 'DIMS');
+                LINE(x-4, z0, x+4, z0, 'DIMS'); LINE(x-4, z1, x+4, z1, 'DIMS');
+                TEXT(x+5, (z0+z1)/2, String(label), 6, 'DIMS');
+            };
+
+            // ── Coordinate mapping ────────────────────────────────────────────
+            const faceZ  = faceHoles.map(h => h.zMm);
+            const zSpan  = Math.max(...faceZ) - Math.min(...faceZ);
+            const useY   = zSpan < 100;
             const useLongY = faceSepAxis === 'x' && !useY;
-            console.log(`[DXF] face=${faceName} | sepAxis=${faceSepAxis} | zSpan=${zSpan.toFixed(0)}mm | useY=${useY} | useLongY=${useLongY} | holes=${faceHoles.length}`);
+
             const plotHoles = faceHoles
                 .map(h => ({ ...h,
                     px: +(useLongY ? h.yMm - globalDatumPx : h.xMm - globalDatumPx).toFixed(1),
@@ -2602,43 +2721,187 @@ async function exportTemplateDXF(maxLength, maxWidth) {
             plotHoles.forEach((h, i) => { h.num = i + 1; });
 
             const { vsPlates, hsPlates } = _computePlates(plotHoles, maxLength, maxWidth);
-            totalPlates += vsPlates.length + hsPlates.length;
-            totalVS += vsPlates.length; totalHS += hsPlates.length;
 
-            // Face section header
+            // Datum bar ends for this face
+            const barEnds = _getDatumBarEnds(
+                faceName, datumSide, heightSide,
+                faceSepAxis, useLongY, useY,
+                globalDatumPx, globalDatumPz
+            );
+
+            // ── Collision-aware text placement ────────────────────────────────
+            // Approximate char width ≈ 0.6× height. Returns true if the text rect
+            // (rotated 0° or 90°) overlaps any hole circle or exits the plate area.
+            const textFits = (tx, ty, txt, h, rot, holes, ox, oz, pLen, pWid) => {
+                const tw = txt.length * 0.6 * h;
+                const th = h;
+                let x0, y0, x1, y1;
+                if (rot === 0) { x0=tx; y0=ty; x1=tx+tw; y1=ty+th; }
+                else           { x0=tx-th; y0=ty; x1=tx; y1=ty+tw; } // 90°
+                if (x0 < ox || x1 > ox+pLen || y0 < oz || y1 > oz+pWid) return false;
+                for (const hh of holes) {
+                    const hx = ox + (hh.px - (hh._minX ?? 0));
+                    const hz = oz + (hh.pz - (hh._minZ ?? 0));
+                    const r  = hh.holeDia / 2 + 1; // 1mm margin
+                    const nx = Math.max(x0, Math.min(hx, x1));
+                    const ny = Math.max(y0, Math.min(hz, y1));
+                    if (Math.hypot(hx-nx, hz-ny) < r) return false;
+                }
+                return true;
+            };
+
+            // ── Draw plates ───────────────────────────────────────────────────
+            const COL_MARGIN = 80, DRAW_PAD = 50, PLATE_GAP = 70;
+            let baseY = DRAW_PAD;
+
+            const drawPlates = (plates, plateType) => {
+                if (!plates.length) return;
+                // Plate long axis drives text rotation:
+                // VS plates are taller than wide → rotate 90°. HS plates are wider → 0°.
+                const isVertical = plateType === 'VS';
+                const rot = isVertical ? 90 : 0;
+
+                for (const plate of plates) {
+                    const ox = COL_MARGIN, oz = baseY;
+                    const pLen = plate.length, pWid = plate.width;
+
+                    // Tag each hole with plate extents for textFits checks
+                    plate.holes.forEach(h => { h._minX = plate.minX; h._minZ = plate.minZ; });
+
+                    // ── Plate outline (RED) ───────────────────────────────────
+                    LINE(ox,       oz,       ox+pLen, oz,       'PLATE_OUTLINE');
+                    LINE(ox+pLen,  oz,       ox+pLen, oz+pWid,  'PLATE_OUTLINE');
+                    LINE(ox+pLen,  oz+pWid,  ox,      oz+pWid,  'PLATE_OUTLINE');
+                    LINE(ox,       oz+pWid,  ox,      oz,       'PLATE_OUTLINE');
+
+                    // ── Screw holes at corners (Ø5mm, 5mm from edges) ─────────
+                    const sr = 2.5;
+                    CIRCLE(ox+5,      oz+5,      sr, 'SCREW_HOLES');
+                    CIRCLE(ox+pLen-5, oz+5,      sr, 'SCREW_HOLES');
+                    CIRCLE(ox+5,      oz+pWid-5, sr, 'SCREW_HOLES');
+                    CIRCLE(ox+pLen-5, oz+pWid-5, sr, 'SCREW_HOLES');
+
+                    // ── Overall dimensions ────────────────────────────────────
+                    HDIM(ox, ox+pLen, oz-20, `${Math.round(pLen)} mm`);
+                    VDIM(ox-20, oz, oz+pWid, `${Math.round(pWid)} mm`);
+
+                    // ── Holes (draw circles, annotate each unique dia once) ────
+                    const annotatedDias = new Set();
+                    for (const h of plate.holes) {
+                        const hx = ox + (h.px - plate.minX);
+                        const hz = oz + (h.pz - plate.minZ);
+                        const r  = h.holeDia / 2;
+                        CIRCLE(hx, hz, r, 'HOLES');
+                        if (!annotatedDias.has(h.holeDia)) {
+                            annotatedDias.add(h.holeDia);
+                            TEXT(hx - r - 1, hz + r + 2, `Ø${h.holeDia}mm`, 5, 'TEXT');
+                        }
+                    }
+
+                    // ── Bar-end measurements (absolute from datum bar endpoint) ─
+                    if (barEnds) {
+                        const { hBarEndPx, vBarEndPz } = barEnds;
+
+                        // Horizontal: HS bar end → nearest plate horizontal edge (left or right)
+                        const heDraw = ox + (hBarEndPx - plate.minX);
+                        const dLeft  = Math.abs(heDraw - ox);
+                        const dRight = Math.abs(heDraw - (ox + pLen));
+                        if (dLeft <= dRight) {
+                            // bar end is closer to left edge
+                            const x0 = Math.min(heDraw, ox), x1 = Math.max(heDraw, ox);
+                            HDIM(x0, x1, oz-45, `${Math.round(Math.abs(hBarEndPx - plate.minX))} mm`);
+                        } else {
+                            // bar end is closer to right edge
+                            const x0 = Math.min(heDraw, ox+pLen), x1 = Math.max(heDraw, ox+pLen);
+                            HDIM(x0, x1, oz-45, `${Math.round(Math.abs(hBarEndPx - plate.maxX))} mm`);
+                        }
+
+                        // Vertical: VS bar end → nearest plate vertical edge (bottom or top)
+                        const veDraw = oz + (vBarEndPz - plate.minZ);
+                        const dBot   = Math.abs(veDraw - oz);
+                        const dTop   = Math.abs(veDraw - (oz + pWid));
+                        if (dBot <= dTop) {
+                            const z0 = Math.min(veDraw, oz), z1 = Math.max(veDraw, oz);
+                            VDIM(ox-45, z0, z1, `${Math.round(Math.abs(vBarEndPz - plate.minZ))} mm`);
+                        } else {
+                            const z0 = Math.min(veDraw, oz+pWid), z1 = Math.max(veDraw, oz+pWid);
+                            VDIM(ox-45, z0, z1, `${Math.round(Math.abs(vBarEndPz - plate.maxZ))} mm`);
+                        }
+                    }
+
+                    // ── Template name (inside plate, collision-aware) ──────────
+                    const nameTxt = [prodNum, cageRef, `${faceName}-${plateType}`, String(plate.id).padStart(3,'0')]
+                        .filter(Boolean).join(' - ');
+                    let placed = false;
+                    for (let fs = 1.0; fs >= 0.3 && !placed; fs = +(fs - 0.1).toFixed(1)) {
+                        // Try center of plate
+                        const tw = nameTxt.length * 0.6 * fs;
+                        const th = fs;
+                        let tx, ty;
+                        if (rot === 0) {
+                            tx = ox + (pLen - tw) / 2;
+                            ty = oz + (pWid - th) / 2;
+                        } else { // 90°
+                            // For 90° text: insertion point = bottom-left of rotated text
+                            // text appears as column running upward
+                            tx = ox + (pLen + th) / 2;
+                            ty = oz + (pWid - tw) / 2;
+                        }
+                        if (textFits(tx, ty, nameTxt, fs, rot, plate.holes, ox, oz, pLen, pWid)) {
+                            TEXT(tx, ty, nameTxt, fs, 'TEXT', rot);
+                            placed = true;
+                        }
+                    }
+                    // If still no fit (very crowded plate), place at minimum size at plate centroid
+                    if (!placed) {
+                        const fs = 0.3;
+                        const tx = rot === 0 ? ox + pLen/2 - nameTxt.length*0.6*fs/2 : ox + pLen/2;
+                        const ty = oz + pWid / 2;
+                        TEXT(tx, ty, nameTxt, fs, 'TEXT', rot);
+                    }
+
+                    baseY += pWid + DRAW_PAD + PLATE_GAP;
+                }
+                baseY += 20;
+            };
+
+            // ── Header for this face DXF ──────────────────────────────────────
+            makeDXFHeader(emit);
+
+            // Face title
             TEXT(COL_MARGIN, baseY + 15,
-                `══════  ${faceName} FACE  ══════  ${faceHoles.length} holes  |  ${vsPlates.length} VS plates + ${hsPlates.length} HS plates`,
-                14, 'TEXT');
+                `${faceName} — ${prodNum ? prodNum + ' / ' : ''}${cageRef}  |  ${faceHoles.length} holes  |  ${vsPlates.length} VS + ${hsPlates.length} HS plates`,
+                12, 'TEXT');
             baseY += 40;
 
-            drawPlates(vsPlates, `VS PLATES — Vertical Struts`);
-            drawPlates(hsPlates, `HS PLATES — Horizontal Struts`);
-            baseY += 30; // gap between face sections
+            drawPlates(vsPlates, 'VS');
+            drawPlates(hsPlates, 'HS');
+
+            emit('0','ENDSEC','0','EOF');
+
+            faceDXFs.push({
+                name: `${cageRef}-${faceName}-template-${suffix}.dxf`,
+                content: dxf.join('\n')
+            });
         }
 
-        // Global title
-        const faceList = Object.keys(faceBuckets).join(' + ');
-        const byDia = {};
-        allHoles.forEach(h => { byDia[h.holeDia] = (byDia[h.holeDia] || 0) + 1; });
-        const sizeStr = Object.entries(byDia).map(([d, c]) => `${d}mm x${c}`).join('  ');
-        TEXT(COL_MARGIN, baseY + 12,
-            `CAGE ${cageRef}  —  ${faceList} FACE PLATE TEMPLATE  |  Rules: max ${maxLength}L x ${maxWidth}W mm  |  ${totalPlates} plates (${totalVS} VS + ${totalHS} HS)  |  ${allHoles.length} holes`,
-            12, 'TEXT');
-        TEXT(COL_MARGIN, baseY - 2,
-            `25mm edge clearance  |  Hole dia = coupler OD + 2mm  |  Sizes: ${sizeStr}`,
-            9, 'TEXT');
-
-        emit('0','ENDSEC','0','EOF');
-
+        // ── Download — single DXF or ZIP ─────────────────────────────────────
         updateProgress(98, 'Saving file…');
         await yield_();
 
-        const blob = new Blob([dxf.join('\n')], { type: 'application/dxf' });
-        const url  = URL.createObjectURL(blob);
-        const a    = document.createElement('a');
-        a.href = url; a.download = `${cageRef}-template-${suffix}.dxf`;
-        document.body.appendChild(a); a.click();
-        document.body.removeChild(a); URL.revokeObjectURL(url);
+        const download = (blob, filename) => {
+            const url = URL.createObjectURL(blob);
+            const a   = document.createElement('a');
+            a.href = url; a.download = filename;
+            document.body.appendChild(a); a.click();
+            document.body.removeChild(a); URL.revokeObjectURL(url);
+        };
+
+        if (faceDXFs.length === 1) {
+            download(new Blob([faceDXFs[0].content], { type: 'application/dxf' }), faceDXFs[0].name);
+        } else {
+            download(buildZip(faceDXFs), `${cageRef}-template-${suffix}.zip`);
+        }
 
         updateProgress(100, 'Done.');
         await yield_();
