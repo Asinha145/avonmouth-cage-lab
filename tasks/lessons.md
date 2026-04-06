@@ -2,6 +2,45 @@
 
 ---
 
+## Never Assume a Spatial Default — Derive It From Geometry (Apr 2026)
+
+**Mistake:** `Datum_Side` dropdown was hardcoded to `'left'` on the grounds that
+`_cageDatum()` always picks `Math.min(...)` (the minimum-coordinate end). Shipped
+as "always left" without checking whether the minimum-coordinate end is actually the
+physical left when viewed from the front.
+
+**Why it was wrong:** "Left" and "right" depend on the viewing direction, which depends
+on which way the N face (Near face) is pointing in BNG space. A cage whose N face is on
+the west side of the wall is viewed looking eastward — in that view, min IFC-X is to
+your RIGHT, not your left. Hardcoding 'left' silently gives the wrong default for any
+cage of that orientation.
+
+**Root cause pattern:** Spatial defaults that appear correct on the development test
+cage can be wrong for cages with a different orientation. This is the same class of
+mistake as the H36/I36 axis-extent bug and the `cageAxisName` proxy bug — encoding an
+orientation assumption instead of deriving the answer from the data.
+
+**Rule:** Any UI default or auto-filled value that depends on cage orientation or
+geometry **must** be computed from the IFC bar data, not assumed. Specifically:
+- Left/right, top/bottom, near/far → derive from face layer positions in IFC space
+- "Viewing direction" when facing the N face → compare avg IFC face-axis of N1A vs F1A
+- Never substitute "it worked on my test cage" for a proper geometric derivation
+
+**Correct implementation — `_detectDatumSide()`:**
+
+| `sepAxis` | Face comparison | Viewing direction | min-coord end |
+|---|---|---|---|
+| `'x'` | N1A +X of F1A | looking west | min IFC-Y = **LEFT** |
+| `'x'` | N1A −X of F1A | looking east | min IFC-Y = **RIGHT** |
+| `'y'` | N1A +Y of F1A | looking south | min IFC-X = **RIGHT** |
+| `'y'` | N1A −Y of F1A | looking north | min IFC-X = **LEFT** |
+| `'z'` | T1A top face | plan view (N up) | min IFC-X = **LEFT** |
+
+**Verified on all 3 reference cages** before shipping — all gave LEFT for different
+geometric reasons, not by coincidence.
+
+---
+
 ## Axis-Extent vs Bar-Role Dimension Bug (H36/I36 — March 2026)
 
 **Mistake:** When computing slab cage dimensions H36 (length) and I36 (height), the implementation used X/Y world-coordinate extents of all mesh bars instead of deriving from the specific bar roles (T1/T2/B1/B2) defined in the spec.

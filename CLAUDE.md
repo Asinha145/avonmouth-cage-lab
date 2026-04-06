@@ -138,6 +138,23 @@ All three files live in `test-cages/` inside this repo. Do not delete or rename 
 These three cages together cover all three axis directions. A feature that passes
 on one cage may silently break the other two.
 
+### 4. Never hardcode spatial defaults — derive them from IFC geometry
+
+Any value that depends on cage orientation (left/right, near/far, top/bottom,
+viewing direction) **must** be computed from bar positions, not assumed.
+
+**Specific rule for Left/Right:**
+`_detectDatumSide()` compares N1A vs F1A face positions on the separation axis
+to determine which way the N face is looking in BNG space, then applies
+standard geographic orientation (IFC-X = easting, IFC-Y = northing) to
+resolve which end is left.
+Never default to `'left'` without this calculation — a cage whose N face is
+on the west side will have min-coordinate = RIGHT, not left.
+
+**General rule:**
+"It works on my test cage" is not a justification for a spatial default.
+Derive it, verify it on all 3 reference cages (1613, P7349, RF35), commit it.
+
 ### 3. Layer datum uses only that layer's own bars
 
 The orange datum sphere for each face layer (F1A, F3A, N1A, …) must be computed
