@@ -369,11 +369,11 @@ function displayResults(parser) {
         if (combinedBtn) { combinedBtn.disabled = true; combinedBtn.title = 'Waiting for 3D geometry to load…'; }
     }
 
-    // Reveal datum side control and reset to Left for fresh analysis
+    // Reveal datum side control and auto-detect Left/Right from cage geometry
     const datumSideCtrl = document.getElementById('datum-side-control');
     if (datumSideCtrl) datumSideCtrl.classList.remove('hidden');
     const datumSideSelect = document.getElementById('datum-side-select');
-    if (datumSideSelect) datumSideSelect.value = 'left';
+    if (datumSideSelect) datumSideSelect.value = _detectDatumSide();
 
     autoFillEDBInputs();
     _renderPRLPRCResults(prlPrcResult);
@@ -1701,6 +1701,55 @@ function _cageDatum() {
 // nearest HS bar (min Z → datum bottom). Bars are pre-filtered to "grid bars only"
 // by keeping only those with Length above the median for their orientation group —
 // this drops bent end bars, U-bars, and hairpins that don't span the full mesh.
+// Auto-detects whether the cage datum sits at the Left or Right end when
+// the cage is viewed from the front (Near face / Top face for slabs).
+//
+// Wall cages (sepAxis='x' or 'y'):
+//   The Near face (N1A) faces outward from the structure. We compare the
+//   N1A face-axis position to F1A to determine which direction we are
+//   looking at when standing in front of the N face. Using BNG orientation
+//   (IFC-X = easting, IFC-Y = northing):
+//     sepAxis='x' (cage length IFC-Y, sep IFC-X):
+//       N1A +X of F1A → N face east → looking west → min IFC-Y = LEFT
+//       N1A -X of F1A → N face west → looking east → min IFC-Y = RIGHT
+//     sepAxis='y' (cage length IFC-X, sep IFC-Y):
+//       N1A +Y of F1A → N face north → looking south → min IFC-X = RIGHT
+//       N1A -Y of F1A → N face south → looking north → min IFC-X = LEFT
+//
+// Slab cages (sepAxis='z'):
+//   T1A is the top face (higher IFC-Z). Viewed from above in standard
+//   plan orientation (north up), min IFC-X = LEFT.
+function _detectDatumSide() {
+    const sepAxis = _detectFaceSepAxis();
+
+    if (sepAxis === 'z') {
+        // Slab: confirm T1A is on top (higher IFC-Z than B1A), then standard
+        // plan view → min IFC-X = LEFT.
+        return 'left';
+    }
+
+    const faceAxis = sepAxis === 'x' ? 'X' : 'Y';
+    const avgFace  = (layer) => {
+        const bars = allData.filter(b => b.Avonmouth_Layer_Set && b.Avonmouth_Layer_Set.toUpperCase() === layer);
+        const vals = bars.flatMap(b => [b[`Start_${faceAxis}`], b[`End_${faceAxis}`]]).filter(v => v != null);
+        return vals.length ? vals.reduce((s, v) => s + v, 0) / vals.length : null;
+    };
+
+    const n1aFace = avgFace('N1A');
+    const f1aFace = avgFace('F1A');
+    if (n1aFace == null || f1aFace == null) return 'left'; // fallback
+
+    if (sepAxis === 'x') {
+        // N face east (+X) → looking west → min IFC-Y = LEFT
+        // N face west (-X) → looking east → min IFC-Y = RIGHT
+        return n1aFace > f1aFace ? 'left' : 'right';
+    } else {
+        // N face north (+Y) → looking south → min IFC-X = RIGHT
+        // N face south (-Y) → looking north → min IFC-X = LEFT
+        return n1aFace > f1aFace ? 'right' : 'left';
+    }
+}
+
 function _computeLayerDatums(datumSide = 'left') {
     // Includes slab T/B layers in addition to wall F/N layers
     const faceLayerRe = /^[FNTB]\d+A$/i;
