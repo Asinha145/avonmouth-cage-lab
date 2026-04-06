@@ -100,6 +100,30 @@ section h2{color:#667eea;margin-bottom:25px;font-size:2rem;border-bottom:3px sol
 .c01-card--warn .c01-card-link  { background: #dd6b20; }
 
 /* Cage axis banner */
+/* Pre-analysis cage reference fields */
+.cage-ref-fields{display:flex;flex-direction:column;gap:8px;margin-bottom:16px;}
+.cage-ref-row{display:flex;align-items:center;gap:10px;}
+.cage-ref-row label{font-size:.82rem;font-weight:600;color:#aaa;white-space:nowrap;width:110px;flex-shrink:0;}
+.cage-ref-row input{
+    flex:1;background:#1a1a2e;border:1px solid #3a3a5a;border-radius:7px;
+    color:#e0e0ff;padding:6px 10px;font-size:.88rem;
+}
+.cage-ref-row input:focus{outline:none;border-color:#667eea;}
+
+/* Datum side control */
+.datum-side-control{
+    display:flex;align-items:center;gap:14px;flex-wrap:wrap;
+    background:#1a1a2e;border:1px solid #3a3a5a;border-radius:10px;
+    padding:10px 18px;margin-bottom:24px;
+}
+.datum-side-label{font-weight:700;color:#ff8c00;font-size:.9rem;white-space:nowrap;}
+#datum-side-select{
+    background:#0d0d1a;border:1px solid #ff8c0060;border-radius:7px;
+    color:#ff8c00;padding:5px 12px;font-size:.9rem;font-weight:600;cursor:pointer;
+}
+#datum-side-select:focus{outline:none;border-color:#ff8c00;}
+.datum-side-hint{font-size:.78rem;color:#666;}
+
 .cage-axis-banner{
     display:flex;align-items:center;gap:12px;flex-wrap:wrap;
     background:linear-gradient(135deg,#667eea10,#764ba220);

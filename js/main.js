@@ -68,6 +68,10 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     document.getElementById('search-input').addEventListener('input', applyFilters);
     document.getElementById('bartype-filter').addEventListener('change', applyFilters);
+    document.getElementById('datum-side-select').addEventListener('change', e => {
+        if (!window._viewer3d || !allData.length) return;
+        window._viewer3d.setLayerDatumMarkers(_computeLayerDatums(e.target.value));
+    });
     document.getElementById('export-excel-btn').addEventListener('click', () => exportXLSX());
     document.getElementById('export-ubars-btn').addEventListener('click',  () => exportEDB('ubars'));
     document.getElementById('export-struts-btn').addEventListener('click', () => exportEDB('struts'));
@@ -197,7 +201,8 @@ async function processFile() {
                     const dims = await window._viewer3d.loadIFC(arrayBuffer, barMap, cageAxisName, _couplerMap);
                     if (dims) _updateDimBoxesFromBREP(dims);
                     _buildViewerCheckboxes();
-                    window._viewer3d.setLayerDatumMarkers(_computeLayerDatums());
+                    const datumSide = document.getElementById('datum-side-select')?.value || 'left';
+                    window._viewer3d.setLayerDatumMarkers(_computeLayerDatums(datumSide));
                     window._viewer3d.setPlateBoxes(_computePlate3DBoxes());
                     // Enable face view DXF buttons now that BREP geometry is loaded
                     const faceBtn = document.getElementById('export-face-dxf-btn');
@@ -363,6 +368,12 @@ function displayResults(parser) {
         const combinedBtn = document.getElementById('export-combined-dxf-btn');
         if (combinedBtn) { combinedBtn.disabled = true; combinedBtn.title = 'Waiting for 3D geometry to load…'; }
     }
+
+    // Reveal datum side control and reset to Left for fresh analysis
+    const datumSideCtrl = document.getElementById('datum-side-control');
+    if (datumSideCtrl) datumSideCtrl.classList.remove('hidden');
+    const datumSideSelect = document.getElementById('datum-side-select');
+    if (datumSideSelect) datumSideSelect.value = 'left';
 
     autoFillEDBInputs();
     _renderPRLPRCResults(prlPrcResult);
@@ -1690,7 +1701,7 @@ function _cageDatum() {
 // nearest HS bar (min Z → datum bottom). Bars are pre-filtered to "grid bars only"
 // by keeping only those with Length above the median for their orientation group —
 // this drops bent end bars, U-bars, and hairpins that don't span the full mesh.
-function _computeLayerDatums() {
+function _computeLayerDatums(datumSide = 'left') {
     // Includes slab T/B layers in addition to wall F/N layers
     const faceLayerRe = /^[FNTB]\d+A$/i;
     const layers = [...new Set(
@@ -1792,10 +1803,13 @@ function _computeLayerDatums() {
             }));
         }
 
-        // Nearest cluster to datum edge (minimum coordinate)
-        const nearestV = vUnits.reduce((best, u) => u.pos < best.pos ? u : best, { pos: Infinity });
+        // VS position: nearest (left) or farthest (right) bar in the length direction.
+        // HS position (height) stays at the minimum — bottom of cage — regardless of side.
+        const nearestV = datumSide === 'right'
+            ? vUnits.reduce((best, u) => u.pos > best.pos ? u : best, { pos: -Infinity })
+            : vUnits.reduce((best, u) => u.pos < best.pos ? u : best, { pos:  Infinity });
         const nearestH = hUnits.reduce((best, u) => u.pos < best.pos ? u : best, { pos: Infinity });
-        if (nearestV.pos === Infinity || nearestH.pos === Infinity) continue;
+        if (!isFinite(nearestV.pos) || nearestH.pos === Infinity) continue;
 
         const vsPos = nearestV.pos;
         const hsPos = nearestH.pos;

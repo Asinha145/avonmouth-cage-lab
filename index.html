@@ -123,6 +123,16 @@
                             <p class="file-name" id="ifc-filename">No file selected</p>
                         </div>
                     </div>
+                    <div class="cage-ref-fields">
+                        <div class="cage-ref-row">
+                            <label for="production-number">Production No.</label>
+                            <input type="text" id="production-number" placeholder="e.g. P7349">
+                        </div>
+                        <div class="cage-ref-row">
+                            <label for="cage-reference">Cage Reference</label>
+                            <input type="text" id="cage-reference" placeholder="e.g. C1">
+                        </div>
+                    </div>
                     <button id="process-btn" class="btn-primary" disabled>Analyse Cage</button>
                     <div id="progress-container" class="hidden">
                         <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
@@ -242,6 +252,16 @@
                 <span class="cage-axis-label">🧭 Auto-detected cage axis:</span>
                 <span class="cage-axis-value" id="cage-axis-info">—</span>
                 <span class="cage-axis-note">Orientation determined purely from bar geometry</span>
+            </div>
+
+            <!-- Datum side control (shown after analysis) -->
+            <div class="datum-side-control hidden" id="datum-side-control">
+                <span class="datum-side-label">Datum Side</span>
+                <select id="datum-side-select">
+                    <option value="left">Left</option>
+                    <option value="right">Right</option>
+                </select>
+                <span class="datum-side-hint">Layer datum markers move to the selected end · Main datum stays fixed</span>
             </div>
 
             <!-- Top stat cards -->
