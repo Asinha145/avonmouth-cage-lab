@@ -1470,7 +1470,15 @@ function _parseIFCBeamHoles(ifcText) {
         for (const ref of bdata.matchAll(/#(\d+)/g)) {
             if (absPos[ref[1]]) {
                 const [bx, by, bz] = absPos[ref[1]];
-                beams.push({ xMm: bx, yMm: by, zMm: bz, od: beamOD[bid] ?? null, layer: beamLayer[bid] ?? null });
+                // Primary OD: ATK EMBEDMENTS pset HEIGHT (set earlier in beamOD map)
+                // Fallback OD: ICOS/other contractors encode diameter in IFCBEAM ObjectType/Description
+                //   as 'PD{n}*...' (e.g. 'PD47*5' → 47 mm, 'PD40*12.5' → 40 mm)
+                let od = beamOD[bid] ?? null;
+                if (od === null) {
+                    const pdM = bdata.match(/'PD(\d+)\*/);
+                    if (pdM) od = parseFloat(pdM[1]);
+                }
+                beams.push({ xMm: bx, yMm: by, zMm: bz, od, layer: beamLayer[bid] ?? null });
                 break;
             }
         }
@@ -1478,7 +1486,7 @@ function _parseIFCBeamHoles(ifcText) {
     if (beams.length === 0) return [];
 
     return beams
-        .filter(b => b.od !== null && /^[VH]S/i.test(b.layer || ''))
+        .filter(b => b.od !== null && /^([VH]S|LB)/i.test(b.layer || ''))
         .map(b => ({ xMm: b.xMm, yMm: b.yMm, zMm: b.zMm, holeDia: b.od + 2, layer: b.layer }));
 }
 
@@ -1540,6 +1548,7 @@ function _computePlates(plotHoles, maxLength, maxWidth) {
 
     const vsHoles = plotHoles.filter(h => /^VS/i.test(h.layer || ''));
     const hsHoles = plotHoles.filter(h => /^HS/i.test(h.layer || ''));
+    const lbHoles = plotHoles.filter(h => /^LB/i.test(h.layer || ''));
 
     // Auto-detect long axis from hole distribution.
     // Wall cage VS: spread across many Z positions (few X columns) → long = Z, narrow = X
@@ -1557,11 +1566,13 @@ function _computePlates(plotHoles, maxLength, maxWidth) {
 
     const vsOri = getOrientation(vsHoles);                        // auto-detect: long=Z wall, long=X slab
     const hsOri = { bandKey: 'pz', groupKey: 'px' };             // HS always long=X (horizontal along cage length)
+    const lbOri = getOrientation(lbHoles);                        // LB: auto-detect same as VS
 
     const vsPlates = bandAndGroup(vsHoles, vsOri.bandKey, vsOri.groupKey).map((h, i) => toPlate(h, i, 'VS'));
     const hsPlates = bandAndGroup(hsHoles, hsOri.bandKey, hsOri.groupKey).map((h, i) => toPlate(h, i, 'HS'));
+    const lbPlates = bandAndGroup(lbHoles, lbOri.bandKey, lbOri.groupKey).map((h, i) => toPlate(h, i, 'LB'));
 
-    return { vsPlates, hsPlates };
+    return { vsPlates, hsPlates, lbPlates };
 }
 
 // Detect which mesh face layer the coupler holes belong to by proximity.
@@ -1941,7 +1952,7 @@ function _computePlate3DBoxes() {
             pz: (useY   ? h.yMm : h.zMm)  - datumPz,
         }));
 
-        const { vsPlates, hsPlates } = _computePlates(plotHoles, 2000, 300);
+        const { vsPlates, hsPlates, lbPlates } = _computePlates(plotHoles, 2000, 300);
 
         // Face plane constant coordinate (IFC-X for sepAxis=x, IFC-Y for y, IFC-Z for z)
         const faceAxisChar = sepAxis === 'x' ? 'X' : sepAxis === 'y' ? 'Y' : 'Z';
@@ -1949,7 +1960,7 @@ function _computePlate3DBoxes() {
         const faceVals = faceBars.flatMap(b => [b[`Start_${faceAxisChar}`], b[`End_${faceAxisChar}`]]).filter(v => v != null);
         const faceCoord = faceVals.length ? faceVals.reduce((s, v) => s + v, 0) / faceVals.length : 0;
 
-        for (const plate of [...vsPlates, ...hsPlates]) {
+        for (const plate of [...vsPlates, ...hsPlates, ...lbPlates]) {
             const pxMid  = (plate.minX + plate.maxX) / 2;
             const pzMid  = (plate.minZ + plate.maxZ) / 2;
             const pxSize = plate.maxX - plate.minX;
@@ -2344,8 +2355,8 @@ async function exportCombinedFaceDXF() {
             }
 
             // ── Plate outlines (at actual face coordinates) ───────────────────
-            const { vsPlates, hsPlates } = _computePlates(plotHoles, 2000, 300);
-            for (const plate of [...vsPlates, ...hsPlates]) {
+            const { vsPlates, hsPlates, lbPlates } = _computePlates(plotHoles, 2000, 300);
+            for (const plate of [...vsPlates, ...hsPlates, ...lbPlates]) {
                 const pType = `${plate.type}-PLATE-${String(plate.id).padStart(2,'0')}`;
                 LINE(plate.minX, baseZ+plate.minZ, plate.maxX, baseZ+plate.minZ, 'PLATE_OUTLINE');
                 LINE(plate.maxX, baseZ+plate.minZ, plate.maxX, baseZ+plate.maxZ, 'PLATE_OUTLINE');
@@ -2381,8 +2392,9 @@ async function exportCombinedFaceDXF() {
             // ── Section title ─────────────────────────────────────────────────
             const nVS = vsPlates.reduce((s, p) => s + p.holes.length, 0);
             const nHS = hsPlates.reduce((s, p) => s + p.holes.length, 0);
+            const nLB = lbPlates.reduce((s, p) => s + p.holes.length, 0);
             TEXT(0, baseZ + maxFacePz + 20,
-                `${cageRef}  |  ${faceName} FACE ELEVATION  |  Scale 1:15  |  ${nBars} bars  |  ${nVS} VS + ${nHS} HS holes  |  ${vsPlates.length + hsPlates.length} plates`,
+                `${cageRef}  |  ${faceName} FACE ELEVATION  |  Scale 1:15  |  ${nBars} bars  |  ${nVS} VS + ${nHS} HS + ${nLB} LB holes  |  ${vsPlates.length + hsPlates.length + lbPlates.length} plates`,
                 18, 'TEXT');
             TEXT(0, baseZ + maxFacePz + 5,
                 `Datum: bottom-left of outer face bars (IFC mm)  |  Hole dia = coupler OD + 2 mm tolerance`,
@@ -2720,7 +2732,7 @@ async function exportTemplateDXF(maxLength, maxWidth) {
                 .sort((a, b) => a.px !== b.px ? a.px - b.px : a.pz - b.pz);
             plotHoles.forEach((h, i) => { h.num = i + 1; });
 
-            const { vsPlates, hsPlates } = _computePlates(plotHoles, maxLength, maxWidth);
+            const { vsPlates, hsPlates, lbPlates } = _computePlates(plotHoles, maxLength, maxWidth);
 
             // Datum bar ends for this face
             const barEnds = _getDatumBarEnds(
@@ -2757,8 +2769,8 @@ async function exportTemplateDXF(maxLength, maxWidth) {
             const drawPlates = (plates, plateType) => {
                 if (!plates.length) return;
                 // Plate long axis drives text rotation:
-                // VS plates are taller than wide → rotate 90°. HS plates are wider → 0°.
-                const isVertical = plateType === 'VS';
+                // VS/LB plates are taller than wide → rotate 90°. HS plates are wider → 0°.
+                const isVertical = plateType === 'VS' || plateType === 'LB';
                 const rot = isVertical ? 90 : 0;
 
                 for (const plate of plates) {
@@ -2876,6 +2888,7 @@ async function exportTemplateDXF(maxLength, maxWidth) {
 
             drawPlates(vsPlates, 'VS');
             drawPlates(hsPlates, 'HS');
+            drawPlates(lbPlates, 'LB');
 
             emit('0','ENDSEC','0','EOF');
 
