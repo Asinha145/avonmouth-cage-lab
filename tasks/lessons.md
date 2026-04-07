@@ -454,6 +454,34 @@ if (sepAxis === 'z') {
 
 ---
 
+## Top/Bottom Dropdown — Controls Bar Crossing Position, Not Layer Filter (Apr 2026)
+
+**Mistake:** The Datum Height (Top/Bottom) dropdown was initially wired to filter which *face layers* to show datum markers for (Top → T1A layers only, Bottom → B1A layers only). The user corrected this.
+
+**What it should do:** Top/Bottom selects the **H-bar crossing position within each layer** — the same way Left/Right selects the V-bar crossing position. Both dropdowns control *where on the mesh* the datum sits, not *which layers* participate.
+
+- `Bottom` → pick the HS bar with minimum pz (nearest to the geometric bottom of the cage)
+- `Top` → pick the HS bar with maximum pz (nearest to the geometric top of the cage)
+
+**All face layers (T1A, B1A, F1A, N1A, F3A…) always get their own datum marker.** No layer should ever be suppressed by these controls.
+
+**Rule:** Any dropdown that says "Left/Right/Top/Bottom" in the datum context controls the *position of the crossing point within each layer*, not which layers are active. Filtering layers by position is a design smell — it loses information and confuses the user.
+
+**Parallel with Left/Right:**
+```javascript
+// Left/Right → VS bar selection
+const nearestV = datumSide === 'right'
+    ? vUnits.reduce((best, u) => u.pos > best.pos ? u : best, { pos: -Infinity })
+    : vUnits.reduce((best, u) => u.pos < best.pos ? u : best, { pos:  Infinity });
+
+// Bottom/Top → HS bar selection (same pattern)
+const nearestH = heightSide === 'top'
+    ? hUnits.reduce((best, u) => u.pos > best.pos ? u : best, { pos: -Infinity })
+    : hUnits.reduce((best, u) => u.pos < best.pos ? u : best, { pos:  Infinity });
+```
+
+---
+
 ## Datum Sphere Size — Use Scene Diagonal, Not Orbit Radius (Apr 2026)
 
 **Mistake:** Initial datum sphere radius = `orbitRadius * 0.018` where orbitRadius ≈ 16.5 m → sphere diameter ≈ 600 mm. Visible as a large red ball on screen ("like a football").

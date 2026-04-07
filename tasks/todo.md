@@ -101,13 +101,34 @@
 
 ---
 
+## G — Session 3: Datum Controls + Template DXF Round 2 ✅ (07 Apr 2026)
+
+### G1 — Datum Side / Slab Face dropdowns ✅
+- [x] `Production_Number` + `Cage_Reference` pre-analysis input fields (HTML + CSS)
+- [x] `Datum Side` (Left/Right) dropdown — post-analysis, auto-detected from N1A vs F1A face-axis comparison using BNG orientation rules (`_detectDatumSide()`)
+- [x] `Datum Height` (Bottom/Top) dropdown — shown only for slab cages (sepAxis='z'), controls which H-bar crossing to use within each layer (min pz = Bottom, max pz = Top)
+- [x] `_computeLayerDatums(datumSide, heightSide)`: removed T/B layer filtering; heightSide now picks nearestH position (min or max); all face layers always get a datum marker
+- [x] `_refreshDatumMarkers()` shared handler for both dropdown change events
+- [x] `_detectSlabFace()` removed — no longer needed; Datum Height defaults to 'bottom'
+- [x] Datum Height dropdown styled to match existing orange-on-dark theme
+
+### G2 — Template DXF Round 2 ✅
+- [x] **Separate DXF pages**: each face (F1A, N1A, T1A, B1A) gets its own DXF file; multiple faces packaged as ZIP via `buildZip()` (pure JS CRC32 + stored, no deps); single face → direct DXF download
+- [x] **Colours**: added DXF TABLES/LAYER section — `PLATE_OUTLINE` → color 1 (red, prints red); `TEXT`, `DIMS`, `HOLES`, `SCREW_HOLES` → color 7 (white in DWG, black on print)
+- [x] **Arial font**: DXF STYLE table entry (`arial.ttf`); all TEXT entities reference it via group code 7
+- [x] **Template naming**: `{ProdNum} - {CageRef} - {FaceName}-{Type} - 001` — reads from UI input fields; placed inside plate at font size 1mm; rotated 0° (HS) or 90° (VS); collision-aware: steps 1mm → 0.3mm until text fits without overlapping hole circles or plate bounds
+- [x] **Hole annotations**: per-hole coupler labels removed; each unique hole diameter annotated once per plate (`Ø52mm` near first occurrence)
+- [x] **Screw holes**: 4× Ø5mm circles at 5mm from each corner per plate (`SCREW_HOLES` layer)
+- [x] **Bar-end measurements**: `_getDatumBarEnds()` mirrors `_computeLayerDatums` selection logic; returns closest endpoint of VS bar (→ `vBarEndPz`) and HS bar (→ `hBarEndPx`) in px/pz space; per plate: HDIM from HS bar end to nearest plate horizontal edge + VDIM from VS bar end to nearest plate vertical edge, labelled with absolute mm distance (replaces 25mm clearance dims)
+
+---
+
 ## Pending
 
-- [ ] Test in AutoCAD — confirm bar outlines + holes overlay at correct positions
+- [ ] Test template DXF in AutoCAD — confirm colours, screw holes, bar-end dims, ZIP integrity
+- [ ] BUG-01: `_cageDatum()` uses `Start_Z/End_Z` for datumPz always; for slabs should use `Start_Y/End_Y` — affects DXF coupler plate positioning, not orange sphere markers
 - [ ] N1A face orientation check — may need left-right mirror for "outside N1A" view
 - [ ] Title block fields: project name, originator logo, DRAWN/CHECKED/APPROVED names, Purpose of Issue
-- [ ] Bar diameter labels on BARS hull outlines (optional)
-- [ ] Orange datum marker visual test on RF35 slab cage
 
 ---
 
@@ -128,3 +149,8 @@
 | `1f9aeb3` | Layer datum: stagger cluster grouping |
 | `70ff73b` | Layer datum: axis mapping fix for sepAxis=y |
 | `ce11f51` | Layer datum: slab support (RF35) — T/B layers, Dir split, per-sepAxis coords |
+| `f12d268` | Datum Side auto-detect + lesson (never hardcode spatial defaults) |
+| `9d32ae2` | Datum Height (Top/Bottom) dropdown for slab cages only |
+| `c2ec593` | fix: Top/Bottom controls H-bar crossing position, not layer filter |
+| `adbfcfc` | style: Datum Height dropdown orange-on-dark theme |
+| `edf3934` | Template DXF round 2 — naming, colours, holes, screw holes, bar-end dims, ZIP |
