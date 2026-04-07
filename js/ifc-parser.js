@@ -176,6 +176,7 @@ class IFCParser {
                 Shape_Code_Base      : null,  // numeric/letter part e.g. "00", "12L"
                 Coupler_Suffix       : null,  // e.g. "GM", "GF", "GMB", "GFB"
                 Coupler_Type         : null,  // e.g. "Male", "Female", "Male Bridging", "Female Bridging"
+                Has_Coupler          : false, // true if INGEROP CPLRTYPE_S > 0 (INGEROP coupler indicator)
                 Rebar_Mark           : null,  // e.g. "503"
                 Full_Rebar_Mark      : null,  // e.g. "S/503"
                 Bar_Type          : null,
@@ -246,6 +247,8 @@ class IFCParser {
                 // ── Bar marks: ATK='Rebar Mark'/'Full Rebar Mark', INGEROP='SERIAL_NUMBER'/'BAR_MARK'.
                 else if (/^(rebar\s+mark|serial_number)$/i.test(n))                              { bar.Rebar_Mark = v; }
                 else if (/^(full\s+rebar\s+mark|bar_mark|group\s+position\s+number)$/i.test(n)) { bar.Full_Rebar_Mark = v; }
+                // ── INGEROP coupler indicator: CPLRTYPE_S > 0 means bar has a coupler fitting.
+                else if (/^CPLRTYPE_S$/i.test(n) && isINGEROP) { if (parseInt(v) > 0) bar.Has_Coupler = true; }
                 // ── Bending dims: ATK='Dim A', INGEROP='DIM_A' (underscore vs space, any case).
                 else if (/^dim[_\s]a$/i.test(n)) { bar.Dim_A = parseFloat(v) || null; }
                 else if (/^dim[_\s]b$/i.test(n)) { bar.Dim_B = parseFloat(v) || null; }

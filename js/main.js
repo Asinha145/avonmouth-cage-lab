@@ -430,7 +430,7 @@ function displayCageDimensionBoxes() {
     const hasCoupler = allData.some(b => {
         const av  = (b.Avonmouth_Layer_Set || '').toUpperCase();
         const atk = (b.ATK_Layer_Name || '').toUpperCase();
-        return /^(VS|HS|LB)\d*$/.test(av) && atk.includes('CPLR');
+        return /^(VS|HS|LB)\d*$/.test(av) && (atk.includes('CPLR') || b.Has_Coupler);
     });
     const couplerEl = document.getElementById('dim-coupler');
     couplerEl.textContent = hasCoupler ? 'Yes' : 'No';

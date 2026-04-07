@@ -1,196 +1,218 @@
-# Avonmouth Cage Lab — Claude Context
+# avonmouth-cage-lab — Context Map
 
-## Permissions
-Full autonomous access. No approval prompts needed.
-
----
-
-## What This Is
-
-**Experimental clone of `avonmouth-cage-v2` (ifc-rebar-analyzer-v2).**
-
-This repo is a public sandbox for two specific workstreams:
-1. **Coupler geometry investigation** — understanding how IFCBEAM coupler head geometry drives
-   through-bar End_Y beyond the F1A face (the ~808mm issue documented in `tasks/pop.md`)
-2. **EDB template making** — developing and testing new EDB export templates before merging
-   them back into the locked cage-v2 repo
-
-**When work is finalised here → cherry-pick / merge the relevant commits into `avonmouth-cage-v2` only.**
-Do not merge wholesale. Identify the specific commits or diffs that implement the feature, and port those only.
+## One-Line Summary
+Sandbox / active development fork of cage-v2. Coupler geometry, template DXF, face-view DXF, combined site-template DXF, multi-vendor IFC support. **cage-v2 is source of truth — cherry-pick only, never wholesale merge.**
 
 ---
 
-## Source Repo
+## File Map
 
-| Field | Value |
+| File | Lines | Purpose |
+|---|---|---|
+| `js/ifc-parser.js` | 1043 | IFC text parser — entity/pset extraction, bar resolution (placement chain → xyz), classification, cage-axis detection, stagger clustering, coupler head extraction, C01 rejection |
+| `js/viewer3d.js` | 682 | Three.js + web-ifc WASM renderer — BREP streaming, three-bbox computation, layer groups, 3D datum markers, plate boxes, orbit controls |
+| `js/main.js` | 3327 | UI orchestration (65+ functions) — file upload, parser→viewer pipeline, stats, tables, filtering/pagination, all export functions, EDB generation, step detection, PRL/PRC validation, datum side detection |
+| `index.html` | — | Entry point — upload form, 3D viewer, result cards, export buttons, EDB inputs, filter panels |
+| `css/style.css` | — | All styling (no framework) |
+| `test-dims.mjs` | — | Regression test — 5 dimension assertions on P7019_C1.ifc |
+| `diag-template-dxf.mjs` | — | Node.js: loads P7349_C1.ifc, validates 74 VS + 49 HS holes from `_parseIFCBeamHoles()` + `_computePlates()` |
+| `docs/c01-ruleset.md` | — | **Authoritative** C01 rejection/warning/zone rules — read before changing rejection logic |
+| `docs/template-dxf.md` | — | Template DXF algorithm spec: plate banding, hole grouping, orientation detection, face auto-detection |
+| `docs/datum.md` | — | Cage datum computation: why BNG origin is wrong, how `_cageDatum()` works |
+| `tasks/output-spec.md` | — | **Contract** for every output field (EDB cells, DXF entities, CSV columns) — read before changing any export |
+| `tasks/lessons.md` | — | Bug post-mortems and corrective rules — read at session start |
+
+**Reference test cages (do not rename/delete):** `test-cages/1613_2HD70719AC1.ifc`, `test-cages/P7349_C1.ifc`, `test-cages/RF35_C01.ifc`
+
+**Ignore:** `node_modules/`, `lib/web-ifc*.js`, `lib/*.wasm`, `*.dxf` (root, generated), `templates/*.xlsx`/`.xlsm` (gitignored, proprietary), `.aidesigner/`, `.agents/`, `.claude/`
+
+---
+
+## Data Flow
+
+```
+IFC file upload
+  → FileReader (text + ArrayBuffer — two separate reads)
+  → IFCParser.parseFile()          [ifc-parser.js]
+      build entity/pset/relationship indexes
+      → extractReinforcementBars()  bar objects (50+ properties each)
+      → resolveAllPositions()        walk IFCLOCALPLACEMENT chain
+      → classifyBars()               Mesh / Strut / Preload / Link / Unknown
+      → detectCageAxis()             unique-perpendicular-positions ratio
+      → tagStaggerClusters()         average-linkage, 100mm threshold
+      → computeRejectionStatus()     C01 flags
+      Output: allData[] (bars) + _couplerMap + cageAxisName + rejection flags
+  → displayResults()               [main.js]
+      stat cards, dimension boxes, C01 banners, layer weight table
+      detect slab vs wall cage (_isSlabCage)
+      populate face-view dropdown
+  → Viewer3D.loadIFC(arrayBuffer)  [viewer3d.js — async]
+      StreamAllMeshes → three bboxes → datum markers → render
+      Output: _wasm3DDims {edbWidth, edbLength, edbHeight, overallHeight, overallWidth, overallLength}
+  → applyFilters() / renderTable() [main.js]
+      allData[] → filteredData[] → paginated rows
+  → exports (gated by _parserRejected):
+      exportCSV()             CSV bar schedule
+      exportXLSX()            Excel (stats + layer table + bar list)
+      exportEDB('ubars'|'struts')   Wall cage EDB
+      exportSlabEDB()         Slab cage EDB
+      exportCageReport()      C01 report PDF
+      exportTemplateDXF()     VS/HS plate layout DXF
+      exportFaceViewDXF()     Bar outlines DXF (per face layer)
+      exportCombinedFaceDXF() Site template (600mm spacing)
+```
+
+**Key state variables (main.js):**
+- `allData[]` — full bar array from parser (constant per file)
+- `filteredData[]` — search/filter subset
+- `_wasm3DDims` — BREP dimensions (overrides parser bbox)
+- `_couplerMap` — Map<expressID, {layer, weight}> for IFCBEAM coupler heads
+- `_parserRejected` — C01 gate (blocks all exports)
+- `_isSlabCage` — gates wall vs slab EDB buttons
+- `_rawIfcText` — retained for DXF generation
+
+---
+
+## Key Architecture
+
+### Three-Bbox System (LOCKED)
+
+| Bbox | Gate | Used for |
+|---|---|---|
+| `meshBbox` | `Bar_Type === 'Mesh'` only | EDB length & height |
+| `allBarBbox` | any bar in barMap | EDB width |
+| `totalBrepBbox` | all BREP geometry unconditionally | Display height/width/length |
+
+**Never consolidate.** Coupler heads and struts extend beyond core mesh in different dimensions.
+
+### Cage-Axis Detection
+Unique-perpendicular-positions ratio per axis. Highest ratio = long axis. Works on X/Y/Z-running and slab cages. **Never revert to weighted span.**
+
+### Stagger Clustering
+1. Split into Z-bands (500mm tolerance) — prevents bottom/top mesh mixing
+2. Average-linkage clustering on (dPerp, dZ) within each band
+3. Merge threshold: `dPerp < 20mm AND dZ < 100mm`
+Validated: 47→16 clusters on reference cage. Do not change thresholds without full regression.
+
+### Weight Priority
+`pset Weight > formula weight (π×r²×L×7777) > 0`
+Pset authoritative. Formula for fallback/UDL only. Never use formula for cage totals.
+
+### Face Separation Axis Detection (LOCKED)
+`_detectFaceSepAxis()` — geometry-based, not from `cageAxisName`. Compares max within-layer spread on X vs Y: face bars cluster tightly on separation axis.
+**All functions using face coordinates must call this. Never use `cageAxisName` for face operations.**
+
+### PRL/PRC Zone Classification
+Three-zone spatial classifier (not AABB):
+- F1A zone: `Y < F1A_ABS_MIN`
+- Void zone: between F1A and N1A minimums
+- N1A zone: `Y > N1A_ABS_MIN`
+Zone boundaries computed from actual bar positions, never hardcoded.
+
+### Cage Datum
+`_cageDatum()` — per-face-layer datum from that layer's own VS/HS bar crossing.
+**Never use BNG global origin. Never mix bars from F1A into F3A datum. One datum per layer.**
+
+### Datum Side Detection
+`_detectDatumSide()` — compares N1A vs F1A face positions on separation axis, applies BNG geographic orientation (IFC-X = easting) to resolve left/right.
+**Never default to `'left'` without this calculation.**
+
+### C01 Rejection Gate (Binary)
+```
+isRejected = unknownCount > 0
+          OR missingLayerCount > 0
+          OR duplicateCount > 0
+          OR missingWeightCount > 0
+          OR diagonal installation
+```
+All-or-nothing. No partial exports. Warnings (yellow banner) are non-blocking.
+
+### Coordinate System
+```
+IFC mm (Z-up, BNG-offset) → web-ifc WASM (metres, Y-up):
+  engine_X =  IFC_X / 1000
+  engine_Y =  IFC_Z / 1000
+  engine_Z = −IFC_Y / 1000
+Never modify.
+```
+
+### Multi-Vendor Support
+Parser handles ATK, ICOS, INGEROP IFC formats (different pset names, spaced tokens). `isVendorRebar` check gates bar extraction. **Never assume ATK-only.**
+
+---
+
+## Commands
+
+```bash
+npm install                     # web-ifc Node.js native (test-only)
+node test-dims.mjs              # regression test (run before every git push)
+node diag-template-dxf.mjs     # generate + validate template DXF from P7349_C1.ifc
+python -m http.server 8000      # local dev server (WASM needs HTTP, not file://)
+```
+
+**Test ground-truth (P7019_C1.ifc, ±20mm):** edbWidth: 1389mm | edbLength: 11082mm | edbHeight: 5080mm
+
+**Three reference cages for full regression (must pass all three):**
+
+| Cage | sepAxis | File |
+|---|---|---|
+| 1613 (2HD70719AC1) | `'y'` — IFC-X running wall | `test-cages/1613_2HD70719AC1.ifc` |
+| P7349 C1 | `'x'` — IFC-Y running wall | `test-cages/P7349_C1.ifc` |
+| RF35 C01 | `'z'` — slab, T/B only | `test-cages/RF35_C01.ifc` |
+
+---
+
+## Locked Constraints
+
+- No build step — vanilla JS
+- No npm packages beyond web-ifc
+- No CSS framework
+- Three-bbox model — never consolidate
+- C01 all-or-nothing — no partial exports
+- Pset weight authoritative — formula is fallback only
+- `tasks/output-spec.md` is the contract — read before changing any export
+- `templates/*.xlsm` gitignored — never commit, local-only
+- Every new feature must handle all three `sepAxis` cases (`'x'`, `'y'`, `'z'`)
+- H36/I36 slab EDB cells from bar `Length` property — never from world-axis coordinate extents
+
+---
+
+## Entry Points for Common Tasks
+
+| Task | Where to start |
 |---|---|
-| Locked source | `C:/Users/ashis/avonmouth-cage-v2/` — `ifc-rebar-analyzer-v2` |
-| This lab | `C:/Users/ashis/avonmouth-cage-lab-local/` — `avonmouth-cage-lab` |
-| Hosted at | https://asinha145.github.io/avonmouth-cage-lab/ (GitHub Pages, root of main) |
-
----
-
-## EDB Templates — NOT PUBLIC
-
-`templates/*.xlsm` and `templates/*.xlsx` are **gitignored** and will never be committed here.
-
-- The EDB download buttons in the UI will still appear but **will 404** — this is intentional.
-- Do not attempt to commit, work around, or stub out the EDB files.
-- All EDB template work is done locally in this folder and only the code changes (JS side) are committed.
-
----
-
-## Relationship to Locked cage-v2
-
-```
-avonmouth-cage-v2 (locked, private EDB)
-        │
-        └── cloned → avonmouth-cage-lab (public, no EDB files)
-                            │
-                            ├── Coupler geometry investigation
-                            ├── EDB template prototyping (local only)
-                            └── Merged back → avonmouth-cage-v2 when finalised
-```
-
-**Rule: cage-v2 is the source of truth.** This lab diverges intentionally for experimentation.
-Never assume cage-lab is up to date — always check the cage-v2 commit hash before merging back.
-
----
-
-## Active Workstreams
-
-### 1. Coupler Geometry Investigation (`tasks/pop.md`) — ✅ CLOSED (31 Mar 2026)
-
-**Problem:** 9 VS2 bars (Dir_Y=1.0) have `Start_Y` inside the N1A zone but `End_Y` at ~808mm
-(far beyond F1A at 346mm). The ~460mm overshoot is the IFCBEAM coupler head entity on the F1A
-face driving the bar's IFC placement origin to the coupler's far end.
-
-**Detection fix (to implement):**
-```javascript
-// Correct outside check — use either end, not just Start_Y
-const maxY = Math.max(b.Start_Y ?? -Infinity, b.End_Y ?? -Infinity);
-const minY = Math.min(b.Start_Y ?? Infinity,  b.End_Y ?? Infinity);
-const outside = minY < N1A_ABS_MIN || maxY > F1A_ABS_MAX;
-```
-
-### 2. Template DXF — ✅ COMPLETE (31 Mar 2026)
-
-Verified against P7349 (10,267mm Y-running wall cage, 162 holes) and earlier cages (1613, 1704, RF35).
-
-**Key design decisions locked:**
-- `_detectFaceSepAxis()` — geometry-based, no dependence on `cageAxisName`
-- `useLongY = faceSepAxis === 'x' && !useY` — px maps to cage length direction
-- HS orientation hardcoded: `{ bandKey:'pz', groupKey:'px' }`
-- `entityMap` O(1) lookup — built once per `_parseIFCBeamHoles` call
-
-### 3. EDB Template Making — 🔄 ONGOING (local only)
-
-- Templates live in `templates/` locally but are gitignored
-- Work involves testing new template structures against live IFC files
-- Finalised template code changes (JS side only) get merged back to cage-v2
+| New rejection rule | `js/ifc-parser.js:computeRejectionStatus()` — check `docs/c01-ruleset.md` first |
+| New EDB field | `js/main.js:extractSlabData()` / `extractWallData()` — check `tasks/output-spec.md` first |
+| New dimension | `js/viewer3d.js:_buildDimensions()` → update `test-dims.mjs` |
+| Template DXF changes | `js/main.js:_parseIFCBeamHoles()` + `_computePlates()` — check `docs/template-dxf.md` first |
+| Face view DXF | `js/main.js:exportFaceViewDXF()` |
+| Site template DXF | `js/main.js:exportCombinedFaceDXF()` — check `docs/site-template-dxf.md` first |
+| Bar classification | `js/ifc-parser.js:classifyBars()` |
+| New vendor support | extend `isVendorRebar` in `js/ifc-parser.js` |
 
 ---
 
 ## Merge-Back Protocol (to cage-v2)
 
-When a feature is ready to port back:
-
-1. `git log --oneline` in this repo — identify the exact commits for the feature
+1. `git log --oneline` — identify exact commits for the feature
 2. In cage-v2: `git cherry-pick <commit-hash>` (or manual diff for complex changes)
-3. Run `node test-dims.mjs` in cage-v2 to confirm regressions are zero
+3. `node test-dims.mjs` in cage-v2 — confirm zero regressions
 4. Commit and push cage-v2
 5. Update `tasks/lessons.md` in cage-v2 if new patterns were discovered
 
 ---
 
-## GitHub Pages
+## Active Workstreams
 
-Site served from root of `main` branch — no build step.
-WASM served from `lib/` — works fine as static file from GitHub CDN.
-
----
-
-## Output Spec
-
-`tasks/output-spec.md` is the contract for every output field in this project.
-Read it before touching any output-producing code. Update it before implementing spec changes.
+1. **Coupler geometry investigation** (`tasks/pop.md`) — CLOSED 31 Mar 2026
+2. **Template DXF** — COMPLETE 31 Mar 2026. Verified on P7349, 1613, 1704, RF35 (162 holes).
+3. **EDB template making** — ONGOING (local only, templates gitignored)
 
 ---
 
-## Development Rules
+## Relationship to cage-v2
 
-### 1. Every new feature must handle all three `sepAxis` cases
-
-`_detectFaceSepAxis()` returns `'x'`, `'y'`, or `'z'`. Any new function that touches
-bar coordinates, datum, DXF export, or 3D placement **must** branch on all three.
-Missing a case silently produces wrong output for that cage direction.
-
-### 2. Backtest on all three reference cages before merge
-
-| Cage | `sepAxis` | File |
-|---|---|---|
-| 1613 (2HD70719AC1) | `'y'` (IFC-X running wall) | `test-cages/1613_2HD70719AC1.ifc` |
-| P7349 C1           | `'x'` (IFC-Y running wall) | `test-cages/P7349_C1.ifc` |
-| RF35 C01           | `'z'` (slab, T/B only)    | `test-cages/RF35_C01.ifc` |
-
-All three files live in `test-cages/` inside this repo. Do not delete or rename them.
-
-These three cages together cover all three axis directions. A feature that passes
-on one cage may silently break the other two.
-
-### 4. Never hardcode spatial defaults — derive them from IFC geometry
-
-Any value that depends on cage orientation (left/right, near/far, top/bottom,
-viewing direction) **must** be computed from bar positions, not assumed.
-
-**Specific rule for Left/Right:**
-`_detectDatumSide()` compares N1A vs F1A face positions on the separation axis
-to determine which way the N face is looking in BNG space, then applies
-standard geographic orientation (IFC-X = easting, IFC-Y = northing) to
-resolve which end is left.
-Never default to `'left'` without this calculation — a cage whose N face is
-on the west side will have min-coordinate = RIGHT, not left.
-
-**General rule:**
-"It works on my test cage" is not a justification for a spatial default.
-Derive it, verify it on all 3 reference cages (1613, P7349, RF35), commit it.
-
-### 3. Layer datum uses only that layer's own bars
-
-The orange datum sphere for each face layer (F1A, F3A, N1A, …) must be computed
-from the VS/HS bar crossing within **that layer's bars only**.
-- F1A datum → F1A bars only
-- F3A datum → F3A bars only
-- Never mix bars from F1A into the F3A datum calculation (the crossing will be at
-  the wrong physical position)
-
-If a layer has no VS bars or no HS bars, no datum marker is placed for that layer
-(correct behaviour — do not fabricate a crossing that doesn't exist).
-
----
-
-## Do Not
-
-- Commit `templates/*.xlsm` / `*.xlsx` — gitignored, proprietary
-- Merge cage-lab wholesale into cage-v2 — cherry-pick only
-- Install additional npm packages (intentionally dependency-light)
-- Stub out or work around the 404 on EDB download buttons
-
----
-
-## Tech Stack (inherited from cage-v2)
-
-- **web-ifc v0.0.77** (`lib/web-ifc-api-iife.js` + `lib/web-ifc.wasm`)
-- Vanilla JS, no build step, browser-only
-- Three.js via CDN
-
-## Key Files
-
-| File | Purpose |
-|---|---|
-| `index.html` | Main entry point |
-| `js/ifc-parser.js` | IFC text parser — bar extraction, pset mapping, coupler heads |
-| `js/viewer3d.js` | Three.js BREP renderer + dimension engine |
-| `js/main.js` | UI controller — wires parser → viewer → EDB export |
-| `tasks/pop.md` | Through-bar / coupler head outside-zone analysis |
-| `tasks/lessons.md` | Error patterns and corrective rules |
+- cage-lab is the **sandbox**; cage-v2 is **locked/production**
+- Cherry-pick specific commits from cage-lab → cage-v2 when stable
+- `main.js` is 3327 lines here vs 1869 in cage-v2 — significant divergence
+- GitHub Pages served from root of `main` (no build step)
