@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DXF Viewer — Cage Lab Test</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: #0f0f1a;
+    color: #e0e0e0;
+    font-family: system-ui, -apple-system, sans-serif;
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    overflow: hidden;
+  }
+
+  /* ── Header ─────────────────────────────────────────────────────────── */
+  header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 16px;
+    background: #1a1a2e;
+    border-bottom: 1px solid #2a2a45;
+    flex-shrink: 0;
+  }
+  header h1 { font-size: .95rem; color: #7eb8f7; font-weight: 600; white-space: nowrap; }
+
+  #file-input { display: none; }
+  label[for="file-input"] {
+    cursor: pointer;
+    background: #2d6a9f;
+    color: white;
+    padding: 5px 14px;
+    border-radius: 5px;
+    font-size: .82rem;
+    white-space: nowrap;
+    transition: background .15s;
+  }
+  label[for="file-input"]:hover { background: #3d8abf; }
+
+  #filename { font-size: .8rem; color: #8a8aaa; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #status   { font-size: .78rem; color: #f0c060; white-space: nowrap; }
+
+  .btn {
+    background: #252540;
+    border: 1px solid #3a3a5a;
+    color: #ccc;
+    padding: 4px 10px;
+    border-radius: 5px;
+    font-size: .78rem;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .btn:hover { background: #2e2e52; }
+  .btn:disabled { opacity: .4; cursor: default; }
+
+  /* ── Main layout ─────────────────────────────────────────────────────── */
+  .main { display: flex; flex: 1; overflow: hidden; }
+
+  /* ── Canvas area ─────────────────────────────────────────────────────── */
+  #canvas-wrap {
+    flex: 1;
+    position: relative;
+    overflow: hidden;
+    background: #111122;
+  }
+
+  #drop-overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    color: #444;
+    font-size: 1.1rem;
+    pointer-events: none;
+    transition: background .15s, color .15s;
+  }
+  #drop-overlay.drag-over { background: rgba(126,184,247,.06); color: #7eb8f7; }
+  #drop-overlay.hidden    { display: none; }
+  #drop-overlay .icon     { font-size: 3rem; }
+  #drop-overlay .sub      { font-size: .8rem; color: #3a3a5a; margin-top: 4px; }
+
+  /* ── Layers panel ────────────────────────────────────────────────────── */
+  #layers-panel {
+    width: 210px;
+    min-width: 150px;
+    background: #13131f;
+    border-left: 1px solid #2a2a45;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  #layers-header {
+    padding: 10px 12px 6px;
+    font-size: .72rem;
+    color: #7eb8f7;
+    text-transform: uppercase;
+    letter-spacing: .07em;
+    border-bottom: 1px solid #2a2a45;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-shrink: 0;
+  }
+  #layer-list { overflow-y: auto; padding: 6px 4px; flex: 1; }
+  .layer-row {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 4px 6px;
+    border-radius: 4px;
+    font-size: .75rem;
+    cursor: pointer;
+    user-select: none;
+  }
+  .layer-row:hover { background: #1e1e35; }
+  .layer-row input[type="checkbox"] { accent-color: #7eb8f7; flex-shrink: 0; cursor: pointer; }
+  .layer-swatch { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; }
+  .layer-name   { color: #ccc; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* ── No-layers placeholder ───────────────────────────────────────────── */
+  .no-layers { padding: 20px 12px; font-size: .75rem; color: #444; text-align: center; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>DXF Viewer</h1>
+  <label for="file-input">Open DXF</label>
+  <input type="file" id="file-input" accept=".dxf,.DXF">
+  <span id="filename">No file loaded</span>
+  <button class="btn" id="btn-fit" disabled>Fit View</button>
+  <button class="btn" id="btn-all-on"  disabled>All On</button>
+  <button class="btn" id="btn-all-off" disabled>All Off</button>
+  <span id="status"></span>
+</header>
+
+<div class="main">
+  <div id="canvas-wrap">
+    <div id="drop-overlay">
+      <div class="icon">&#128196;</div>
+      <div>Drop a DXF file here</div>
+      <div class="sub">or use the Open DXF button above</div>
+    </div>
+  </div>
+
+  <div id="layers-panel">
+    <div id="layers-header">
+      <span>Layers</span>
+    </div>
+    <div id="layer-list">
+      <div class="no-layers">Load a DXF to see layers</div>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+// Uses dxf-viewer by vagran — https://github.com/vagran/dxf-viewer
+// Served via esm.run CDN (wraps npm package as native ESM)
+import { DxfViewer } from 'https://esm.run/dxf-viewer';
+
+const canvasWrap  = document.getElementById('canvas-wrap');
+const dropOverlay = document.getElementById('drop-overlay');
+const fileInput   = document.getElementById('file-input');
+const filenameEl  = document.getElementById('filename');
+const statusEl    = document.getElementById('status');
+const layerList   = document.getElementById('layer-list');
+const btnFit      = document.getElementById('btn-fit');
+const btnAllOn    = document.getElementById('btn-all-on');
+const btnAllOff   = document.getElementById('btn-all-off');
+
+let viewer = null;
+
+// ── Initialise viewer once (lazily, on first file load) ────────────────
+function getViewer() {
+    if (viewer) return viewer;
+    viewer = new DxfViewer(canvasWrap, {
+        autoResize: true,
+        clearColor: 0x111122,
+        antialias: true,
+        pointSize: 2,
+    });
+    return viewer;
+}
+
+// ── Load a DXF File object ─────────────────────────────────────────────
+async function loadDXF(file) {
+    if (!file?.name.toLowerCase().endsWith('.dxf')) {
+        statusEl.textContent = 'Not a DXF file';
+        return;
+    }
+
+    const v = getViewer();
+    dropOverlay.classList.add('hidden');
+    filenameEl.textContent = file.name;
+    statusEl.textContent = 'Loading…';
+    layerList.innerHTML = '';
+    btnFit.disabled = btnAllOn.disabled = btnAllOff.disabled = true;
+
+    const url = URL.createObjectURL(file);
+    try {
+        await v.Load({
+            url,
+            fonts: [],
+            onProgress(phase, loaded, total) {
+                statusEl.textContent = total > 0
+                    ? `${phase} ${Math.round(loaded / total * 100)}%`
+                    : phase;
+            },
+        });
+        v.FitView();
+        statusEl.textContent = `Loaded — ${file.name}`;
+        btnFit.disabled = btnAllOn.disabled = btnAllOff.disabled = false;
+        renderLayerPanel(v);
+    } catch (err) {
+        statusEl.textContent = `Error: ${err.message}`;
+        console.error('[dxf-test] Load failed:', err);
+    } finally {
+        URL.revokeObjectURL(url);
+    }
+}
+
+// ── Layer panel ────────────────────────────────────────────────────────
+function renderLayerPanel(v) {
+    const layers = v.GetLayers() ?? [];
+    layerList.innerHTML = '';
+    if (!layers.length) {
+        layerList.innerHTML = '<div class="no-layers">No named layers found</div>';
+        return;
+    }
+    for (const layer of layers) {
+        const row = document.createElement('label');
+        row.className = 'layer-row';
+
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = true;
+        cb.addEventListener('change', () => v.ShowLayer(layer.name, cb.checked));
+
+        const swatch = document.createElement('div');
+        swatch.className = 'layer-swatch';
+        // layer.color may be a hex number (0xRRGGBB) or an object with r/g/b
+        const raw = layer.color;
+        let hex = 'aaaaaa';
+        if (typeof raw === 'number') {
+            hex = raw.toString(16).padStart(6, '0');
+        } else if (raw && typeof raw === 'object') {
+            const r = Math.round((raw.r ?? 0.67) * 255);
+            const g = Math.round((raw.g ?? 0.67) * 255);
+            const b = Math.round((raw.b ?? 0.67) * 255);
+            hex = ((r << 16) | (g << 8) | b).toString(16).padStart(6, '0');
+        }
+        swatch.style.background = '#' + hex;
+
+        const name = document.createElement('span');
+        name.className = 'layer-name';
+        name.textContent = layer.name || '(default)';
+        name.title = layer.name || '';
+
+        row.append(cb, swatch, name);
+        layerList.appendChild(row);
+    }
+}
+
+function setAllLayers(visible) {
+    if (!viewer) return;
+    const checkboxes = layerList.querySelectorAll('input[type="checkbox"]');
+    checkboxes.forEach(cb => {
+        cb.checked = visible;
+        cb.dispatchEvent(new Event('change'));
+    });
+}
+
+// ── Event wiring ───────────────────────────────────────────────────────
+fileInput.addEventListener('change', e => {
+    if (e.target.files[0]) loadDXF(e.target.files[0]);
+    e.target.value = '';           // allow re-selecting same file
+});
+
+btnFit.addEventListener('click', () => viewer?.FitView());
+btnAllOn.addEventListener('click',  () => setAllLayers(true));
+btnAllOff.addEventListener('click', () => setAllLayers(false));
+
+// Drag-and-drop
+canvasWrap.addEventListener('dragenter', e => { e.preventDefault(); dropOverlay.classList.add('drag-over'); });
+canvasWrap.addEventListener('dragover',  e => { e.preventDefault(); dropOverlay.classList.add('drag-over'); });
+canvasWrap.addEventListener('dragleave', e => { if (!canvasWrap.contains(e.relatedTarget)) dropOverlay.classList.remove('drag-over'); });
+canvasWrap.addEventListener('drop', e => {
+    e.preventDefault();
+    dropOverlay.classList.remove('drag-over');
+    const file = e.dataTransfer.files[0];
+    if (file) loadDXF(file);
+});
+</script>
+</body>
+</html>
