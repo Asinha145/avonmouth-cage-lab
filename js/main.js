@@ -2403,7 +2403,9 @@ async function exportCombinedFaceDXF() {
                 .sort((a, b) => a.px !== b.px ? a.px - b.px : a.pz - b.pz);
             plotHoles.forEach((h, i) => { h.num = i + 1; });
 
-            for (const h of plotHoles) {
+            // LB holes are drawn in their own side panel — exclude from face view
+            const vsHsHoles = plotHoles.filter(h => !/^LB/i.test(h.layer || ''));
+            for (const h of vsHsHoles) {
                 CIRCLE(h.px, baseZ + h.pz, h.holeDia / 2, 'HOLES');
                 TEXT(h.px + h.holeDia/2 + 3, baseZ + h.pz - 3,
                     `${cageRef}-CPLR-${String(h.num).padStart(3,'0')}`, 5, 'TEXT');
@@ -2422,23 +2424,23 @@ async function exportCombinedFaceDXF() {
                     9, 'TEXT');
             }
 
-            // ── Dimension ticks ───────────────────────────────────────────────
-            const maxFacePx = Math.max(...plotHoles.map(h => h.px));
-            const maxFacePz = Math.max(...plotHoles.map(h => h.pz));
+            // ── Dimension ticks (VS + HS holes only — LB dims in side panel) ──
+            const maxFacePx = vsHsHoles.length ? Math.max(...vsHsHoles.map(h => h.px)) : 0;
+            const maxFacePz = vsHsHoles.length ? Math.max(...vsHsHoles.map(h => h.pz)) : 0;
 
             // Overall span dims
             HDIM(0, maxFacePx, baseZ - 45, `${Math.round(maxFacePx)} mm`);
             VDIM(-55, baseZ, baseZ + maxFacePz, `${Math.round(maxFacePz)} mm`);
 
-            // X tick marks for each unique hole X position
-            const uniqPx = [...new Set(plotHoles.map(h => Math.round(h.px)))].sort((a,b)=>a-b);
+            // X tick marks for each unique VS/HS hole X position
+            const uniqPx = [...new Set(vsHsHoles.map(h => Math.round(h.px)))].sort((a,b)=>a-b);
             for (const xv of uniqPx) {
                 LINE(xv, baseZ - 15, xv, baseZ - 28, 'DIMS');
                 TEXT(xv - 8, baseZ - 40, String(xv), 6, 'DIMS');
             }
 
-            // Z tick marks for each unique hole Z position
-            const uniqPz = [...new Set(plotHoles.map(h => Math.round(h.pz)))].sort((a,b)=>a-b);
+            // Z tick marks for each unique VS/HS hole Z position
+            const uniqPz = [...new Set(vsHsHoles.map(h => Math.round(h.pz)))].sort((a,b)=>a-b);
             for (const zv of uniqPz) {
                 LINE(-15, baseZ + zv, -28, baseZ + zv, 'DIMS');
                 TEXT(-75, baseZ + zv - 3, String(zv), 6, 'DIMS');
@@ -2464,13 +2466,17 @@ async function exportCombinedFaceDXF() {
                 const lbOffX = maxFacePx + LB_X_GAP;
                 const lbMaxPx = Math.max(...lbPlotHoles.map(h => h.px));
                 // Vertical separator between face view and LB panel
-                LINE(maxFacePx + LB_X_GAP / 2, baseZ, maxFacePx + LB_X_GAP / 2, baseZ + maxFacePz, 'DIMS');
+                const lbMaxPz = Math.max(...lbPlotHoles.map(h => h.pz));
+                const sepHeight = Math.max(maxFacePz, lbMaxPz);
+                LINE(maxFacePx + LB_X_GAP / 2, baseZ, maxFacePx + LB_X_GAP / 2, baseZ + sepHeight, 'DIMS');
                 TEXT(lbOffX, baseZ + maxFacePz + 20,
                     `${faceName} — LB PLATES  |  ${lbPlates.length} plate${lbPlates.length !== 1 ? 's' : ''}  |  ${nLB} holes`,
                     14, 'TEXT');
-                for (const h of lbPlotHoles) {
+                lbPlotHoles.forEach((h, i) => {
                     CIRCLE(h.px + lbOffX, baseZ + h.pz, h.holeDia / 2, 'HOLES');
-                }
+                    TEXT(h.px + lbOffX + h.holeDia/2 + 3, baseZ + h.pz - 3,
+                        `${cageRef}-LB-${String(i + 1).padStart(3,'0')}`, 5, 'TEXT');
+                });
                 for (const plate of lbPlates) {
                     const pType = `LB-PLATE-${String(plate.id).padStart(2,'0')}`;
                     LINE(plate.minX+lbOffX, baseZ+plate.minZ, plate.maxX+lbOffX, baseZ+plate.minZ, 'PLATE_OUTLINE');
