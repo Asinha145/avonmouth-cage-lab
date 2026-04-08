@@ -2455,40 +2455,41 @@ async function exportCombinedFaceDXF() {
                 `Datum: bottom-left of outer face bars (IFC mm)  |  Hole dia = coupler OD + 2 mm tolerance`,
                 8, 'TEXT');
 
-            // ── LB Plates — separate sub-section below face elevation ─────────
-            const LB_SUBSEC_GAP = 100;
+            // ── LB Plates — side panel to the right of face elevation ────────
+            // Drawn at same baseZ + pz as the face so heights align, but offset
+            // in X by (maxFacePx + gap) so they never overlap the bar outlines.
+            const LB_X_GAP = 200;
             const lbPlotHoles = plotHoles.filter(h => /^LB/i.test(h.layer || ''));
-            let lbSectionHeight = 0;
             if (lbPlates.length > 0 && lbPlotHoles.length > 0) {
-                const lbBaseZ = baseZ + maxFacePz + HEADER_H + LB_SUBSEC_GAP;
-                const lbMaxPz = Math.max(...lbPlotHoles.map(h => h.pz));
+                const lbOffX = maxFacePx + LB_X_GAP;
                 const lbMaxPx = Math.max(...lbPlotHoles.map(h => h.px));
-                TEXT(0, lbBaseZ + lbMaxPz + 20,
+                // Vertical separator between face view and LB panel
+                LINE(maxFacePx + LB_X_GAP / 2, baseZ, maxFacePx + LB_X_GAP / 2, baseZ + maxFacePz, 'DIMS');
+                TEXT(lbOffX, baseZ + maxFacePz + 20,
                     `${faceName} — LB PLATES  |  ${lbPlates.length} plate${lbPlates.length !== 1 ? 's' : ''}  |  ${nLB} holes`,
                     14, 'TEXT');
                 for (const h of lbPlotHoles) {
-                    CIRCLE(h.px, lbBaseZ + h.pz, h.holeDia / 2, 'HOLES');
+                    CIRCLE(h.px + lbOffX, baseZ + h.pz, h.holeDia / 2, 'HOLES');
                 }
                 for (const plate of lbPlates) {
                     const pType = `LB-PLATE-${String(plate.id).padStart(2,'0')}`;
-                    LINE(plate.minX, lbBaseZ+plate.minZ, plate.maxX, lbBaseZ+plate.minZ, 'PLATE_OUTLINE');
-                    LINE(plate.maxX, lbBaseZ+plate.minZ, plate.maxX, lbBaseZ+plate.maxZ, 'PLATE_OUTLINE');
-                    LINE(plate.maxX, lbBaseZ+plate.maxZ, plate.minX, lbBaseZ+plate.maxZ, 'PLATE_OUTLINE');
-                    LINE(plate.minX, lbBaseZ+plate.maxZ, plate.minX, lbBaseZ+plate.minZ, 'PLATE_OUTLINE');
-                    TEXT(plate.minX, lbBaseZ+plate.maxZ+6,
+                    LINE(plate.minX+lbOffX, baseZ+plate.minZ, plate.maxX+lbOffX, baseZ+plate.minZ, 'PLATE_OUTLINE');
+                    LINE(plate.maxX+lbOffX, baseZ+plate.minZ, plate.maxX+lbOffX, baseZ+plate.maxZ, 'PLATE_OUTLINE');
+                    LINE(plate.maxX+lbOffX, baseZ+plate.maxZ, plate.minX+lbOffX, baseZ+plate.maxZ, 'PLATE_OUTLINE');
+                    LINE(plate.minX+lbOffX, baseZ+plate.maxZ, plate.minX+lbOffX, baseZ+plate.minZ, 'PLATE_OUTLINE');
+                    TEXT(plate.minX+lbOffX, baseZ+plate.maxZ+6,
                         `${pType}  ${Math.round(plate.length)}×${Math.round(plate.width)} mm  (${plate.holes.length} holes)`,
                         9, 'TEXT');
                 }
-                lbSectionHeight = LB_SUBSEC_GAP + lbMaxPz + HEADER_H;
-                contentMaxX = Math.max(contentMaxX, lbMaxPx);
+                contentMaxX = Math.max(contentMaxX, lbOffX + lbMaxPx);
             }
 
             // Track content bounding box
             contentMaxX = Math.max(contentMaxX, maxFacePx);
-            contentMaxZ = baseZ + maxFacePz + HEADER_H + lbSectionHeight;
+            contentMaxZ = baseZ + maxFacePz + HEADER_H;
 
             // Advance baseZ for next section
-            baseZ += maxFacePz + HEADER_H + lbSectionHeight + SECTION_GAP + DIM_BELOW;
+            baseZ += maxFacePz + HEADER_H + SECTION_GAP + DIM_BELOW;
         }
 
         // ── Drawing border + title block (A0 landscape, 1:15) ────────────────
