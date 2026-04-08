@@ -2902,18 +2902,18 @@ async function exportTemplateDXF(maxLength, maxWidth) {
                         const tw = txtChars * 0.6 * fs;
                         const th = fs;
                         if (rot === 0) {
-                            // Horizontal text: fix x at centre, scan y from top to bottom
+                            // Horizontal text: fix x at centre, scan y 1mm steps
                             const txC = ox + (pLen - tw) / 2;
-                            for (let ty = oz + PAD; ty + th <= oz + pWid - PAD; ty += Math.max(0.5, th * 0.4)) {
+                            for (let ty = oz + PAD; ty + th <= oz + pWid - PAD; ty += 1) {
                                 if (textFits(txC, ty, nameTxt, fs, rot, plate.holes, ox, oz, pLen, pWid)) {
                                     TEXT(txC, ty, nameTxt, fs, 'TEXT', rot);
                                     placed = true; break outer;
                                 }
                             }
                         } else {
-                            // 90° text: fix x at plate centre, scan ty (insertion = bottom of text col)
+                            // 90° text: fix x at plate centre, scan ty 1mm steps
                             const txC = ox + (pLen + th) / 2;
-                            for (let ty = oz + PAD; ty + tw <= oz + pWid - PAD; ty += Math.max(0.5, fs * 0.4)) {
+                            for (let ty = oz + PAD; ty + tw <= oz + pWid - PAD; ty += 1) {
                                 if (textFits(txC, ty, nameTxt, fs, rot, plate.holes, ox, oz, pLen, pWid)) {
                                     TEXT(txC, ty, nameTxt, fs, 'TEXT', rot);
                                     placed = true; break outer;
@@ -2921,12 +2921,34 @@ async function exportTemplateDXF(maxLength, maxWidth) {
                             }
                         }
                     }
-                    // Fallback: minimum size at centroid, no collision check
+                    // Fallback: scan at FS_MIN with 1mm steps rather than blindly placing at centroid
                     if (!placed) {
                         const fs = FS_MIN;
                         const tw = txtChars * 0.6 * fs;
-                        const tx = rot === 0 ? ox + (pLen - tw) / 2 : ox + (pLen + fs) / 2;
-                        TEXT(tx, oz + pWid / 2, nameTxt, fs, 'TEXT', rot);
+                        const th = fs;
+                        let fbPlaced = false;
+                        if (rot === 0) {
+                            const txC = ox + (pLen - tw) / 2;
+                            for (let ty = oz + PAD; ty + th <= oz + pWid - PAD; ty += 1) {
+                                if (textFits(txC, ty, nameTxt, fs, rot, plate.holes, ox, oz, pLen, pWid)) {
+                                    TEXT(txC, ty, nameTxt, fs, 'TEXT', rot);
+                                    fbPlaced = true; break;
+                                }
+                            }
+                        } else {
+                            const txC = ox + (pLen + th) / 2;
+                            for (let ty = oz + PAD; ty + tw <= oz + pWid - PAD; ty += 1) {
+                                if (textFits(txC, ty, nameTxt, fs, rot, plate.holes, ox, oz, pLen, pWid)) {
+                                    TEXT(txC, ty, nameTxt, fs, 'TEXT', rot);
+                                    fbPlaced = true; break;
+                                }
+                            }
+                        }
+                        // Last resort: centroid (no collision check — plate too crowded)
+                        if (!fbPlaced) {
+                            const tx = rot === 0 ? ox + (pLen - tw) / 2 : ox + (pLen + fs) / 2;
+                            TEXT(tx, oz + pWid / 2, nameTxt, fs, 'TEXT', rot);
+                        }
                     }
 
                     baseY += pWid + DRAW_PAD + PLATE_GAP;
