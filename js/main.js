@@ -1488,8 +1488,30 @@ function _parseIFCBeamHoles(ifcText) {
     }
     if (beams.length === 0) return [];
 
+    // Compute mesh bounding box on sep axis for LB outside-mesh filtering.
+    // LB (Loose Bar) couplers can run in any direction — only those whose origin
+    // falls outside the mesh on the face-separation axis are through-face holes.
+    // VS/HS are always through-face by engineering convention — no position check needed.
+    const sepAxis = _detectFaceSepAxis();
+    const meshBars = allData.filter(b => b.Bar_Type === 'Mesh');
+    const meshVals = meshBars.flatMap(b => [
+        sepAxis === 'x' ? b.Start_X : sepAxis === 'y' ? b.Start_Y : b.Start_Z,
+        sepAxis === 'x' ? b.End_X   : sepAxis === 'y' ? b.End_Y   : b.End_Z,
+    ]).filter(v => v != null && isFinite(v));
+    const meshMin = meshVals.length ? Math.min(...meshVals) : -Infinity;
+    const meshMax = meshVals.length ? Math.max(...meshVals) :  Infinity;
+
     return beams
-        .filter(b => b.od !== null && /^([VH]S|LB)/i.test(b.layer || ''))
+        .filter(b => {
+            if (!b.od) return false;
+            const layer = b.layer || '';
+            if (/^[VH]S/i.test(layer)) return true;
+            if (/^LB/i.test(layer)) {
+                const beamVal = sepAxis === 'x' ? b.xMm : sepAxis === 'y' ? b.yMm : b.zMm;
+                return beamVal < meshMin || beamVal > meshMax;
+            }
+            return false;
+        })
         .map(b => ({ xMm: b.xMm, yMm: b.yMm, zMm: b.zMm, holeDia: b.od + 2, layer: b.layer }));
 }
 
