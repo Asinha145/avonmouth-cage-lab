@@ -1521,12 +1521,11 @@ function _parseIFCBeamHoles(ifcText) {
             const layer = b.layer || '';
             if (/^[VH]S/i.test(layer)) return true;
             if (/^LB/i.test(layer)) {
-                // Gate 1 — CartesianPoint must be outside mesh bbox on sepAxis
-                const beamVal = sepAxis === 'x' ? b.xMm : sepAxis === 'y' ? b.yMm : b.zMm;
-                if (beamVal >= meshMin && beamVal <= meshMax) return false;
-                // Gate 2 — barrel (zAxis) must be aligned with the face normal (sepAxis).
-                // A Y-direction barrel on an X-face runs parallel to the face — not a through-face hole.
-                // Threshold cos45° = 0.707: barrel within ±45° of face normal qualifies.
+                // Direction gate (primary): if barrel direction is known, use it.
+                // A barrel aligned with sepAxis penetrates the face regardless of
+                // where its origin sits (inside or outside the mesh).
+                // A barrel running parallel to the face (Y or Z for X-face) is never a hole.
+                // Threshold: cos45° = 0.707 — barrel within ±45° of face normal.
                 if (b.zDir) {
                     const [dx, dy, dz] = b.zDir;
                     const mag = Math.sqrt(dx*dx + dy*dy + dz*dz);
@@ -1534,10 +1533,12 @@ function _parseIFCBeamHoles(ifcText) {
                         const faceComp = sepAxis === 'x' ? Math.abs(dx)
                                        : sepAxis === 'y' ? Math.abs(dy)
                                        :                   Math.abs(dz);
-                        if (faceComp / mag < 0.707) return false;
+                        return faceComp / mag >= 0.707;
                     }
                 }
-                return true;
+                // Position fallback (no zDir): origin must be outside mesh on sepAxis
+                const beamVal = sepAxis === 'x' ? b.xMm : sepAxis === 'y' ? b.yMm : b.zMm;
+                return beamVal < meshMin || beamVal > meshMax;
             }
             return false;
         })
