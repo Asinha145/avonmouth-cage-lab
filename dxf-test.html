@@ -165,6 +165,7 @@
 // Uses dxf-viewer by vagran — https://github.com/vagran/dxf-viewer
 // Served via esm.run CDN (wraps npm package as native ESM)
 import { DxfViewer } from 'https://esm.run/dxf-viewer';
+import * as THREE from 'https://esm.run/three';
 
 const canvasWrap  = document.getElementById('canvas-wrap');
 const dropOverlay = document.getElementById('drop-overlay');
@@ -183,7 +184,7 @@ function getViewer() {
     if (viewer) return viewer;
     viewer = new DxfViewer(canvasWrap, {
         autoResize: true,
-        clearColor: 0x111122,
+        clearColor: new THREE.Color(0x111122),
         antialias: true,
         pointSize: 2,
     });

@@ -354,8 +354,12 @@ function displayResults(parser) {
 
     const templateDxfBtn = document.getElementById('export-template-dxf-btn');
     if (templateDxfBtn) {
+        // Template DXF is formwork geometry — depends only on IFCBEAM coupler positions,
+        // not bar weights or schedule data. It must NOT be gated by C01 rejection.
+        // Formwork plates are fabricated before the cage arrives — blocking on C01 would
+        // delay the works. Gate only on VS/HS coupler presence.
         const hasVSHS = [..._couplerMap.values()].some(c => /^(VS|HS)/i.test(c.layer || ''));
-        templateDxfBtn.classList.toggle('hidden', !hasVSHS || rejected);
+        templateDxfBtn.classList.toggle('hidden', !hasVSHS);
     }
 
     // Populate face-view dropdown and show section
@@ -1776,6 +1780,8 @@ function _bucketHolesByFace(holes) {
 // systems are identical and the two DXFs overlay exactly in AutoCAD.
 // datumPx = min IFC-Y (or X) of all F/N face bars — left end of cage face.
 // datumPz = min IFC-Z of all F/N face bars — bottom of cage (construction joint level).
+//           For slab cages (sepAxis='z'): min IFC-Y of T/B face bars — near edge of slab.
+//           (Slab template DXF uses pz = yMm - datumPz, so datumPz must be IFC-Y based.)
 function _cageDatum() {
     const sepAxis = _detectFaceSepAxis();
     // Use outermost face layers only (F1A + N1A for wall, T1A + B1A for slab).
@@ -1786,7 +1792,9 @@ function _cageDatum() {
     const pxVals = faceBars.flatMap(b =>
         sepAxis === 'x' ? [b.Start_Y, b.End_Y] : [b.Start_X, b.End_X]
     ).filter(v => v != null);
-    const pzVals = faceBars.flatMap(b => [b.Start_Z, b.End_Z]).filter(v => v != null);
+    const pzVals = faceBars.flatMap(b =>
+        sepAxis === 'z' ? [b.Start_Y, b.End_Y] : [b.Start_Z, b.End_Z]
+    ).filter(v => v != null);
     return {
         datumPx: Math.min(...pxVals),
         datumPz: Math.min(...pzVals),
@@ -2803,13 +2811,6 @@ async function exportTemplateDXF(maxLength, maxWidth) {
 
             const { vsPlates, hsPlates, lbPlates } = _computePlates(plotHoles, maxLength, maxWidth);
 
-            // Datum bar ends for this face
-            const barEnds = _getDatumBarEnds(
-                faceName, datumSide, heightSide,
-                faceSepAxis, useLongY, useY,
-                globalDatumPx, globalDatumPz
-            );
-
             // ── Collision-aware text placement ────────────────────────────────
             // Approximate char width ≈ 0.6× height. Returns true if the text rect
             // (rotated 0° or 90°) overlaps any hole circle or exits the plate area.
@@ -2837,14 +2838,14 @@ async function exportTemplateDXF(maxLength, maxWidth) {
 
             const drawPlates = (plates, plateType) => {
                 if (!plates.length) return;
-                // Plate long axis drives text rotation:
-                // VS/LB plates are taller than wide → rotate 90°. HS plates are wider → 0°.
-                const isVertical = plateType === 'VS' || plateType === 'LB';
-                const rot = isVertical ? 90 : 0;
 
                 for (const plate of plates) {
                     const ox = COL_MARGIN, oz = baseY;
                     const pLen = plate.length, pWid = plate.width;
+
+                    // Text runs along the longest side of the plate.
+                    const isVertical = pWid > pLen;
+                    const rot = isVertical ? 90 : 0;
 
                     // Tag each hole with plate extents for textFits checks
                     plate.holes.forEach(h => { h._minX = plate.minX; h._minZ = plate.minZ; });
@@ -2862,7 +2863,7 @@ async function exportTemplateDXF(maxLength, maxWidth) {
                     CIRCLE(ox+5,      oz+pWid-5, sr, 'SCREW_HOLES');
                     CIRCLE(ox+pLen-5, oz+pWid-5, sr, 'SCREW_HOLES');
 
-                    // ── Overall dimensions ────────────────────────────────────
+                    // ── Overall dimensions (plate width + height only) ─────────
                     HDIM(ox, ox+pLen, oz-20, `${Math.round(pLen)} mm`);
                     VDIM(ox-20, oz, oz+pWid, `${Math.round(pWid)} mm`);
 
@@ -2879,66 +2880,53 @@ async function exportTemplateDXF(maxLength, maxWidth) {
                         }
                     }
 
-                    // ── Bar-end measurements (absolute from datum bar endpoint) ─
-                    if (barEnds) {
-                        const { hBarEndPx, vBarEndPz } = barEnds;
-
-                        // Horizontal: HS bar end → nearest plate horizontal edge (left or right)
-                        const heDraw = ox + (hBarEndPx - plate.minX);
-                        const dLeft  = Math.abs(heDraw - ox);
-                        const dRight = Math.abs(heDraw - (ox + pLen));
-                        if (dLeft <= dRight) {
-                            // bar end is closer to left edge
-                            const x0 = Math.min(heDraw, ox), x1 = Math.max(heDraw, ox);
-                            HDIM(x0, x1, oz-45, `${Math.round(Math.abs(hBarEndPx - plate.minX))} mm`);
-                        } else {
-                            // bar end is closer to right edge
-                            const x0 = Math.min(heDraw, ox+pLen), x1 = Math.max(heDraw, ox+pLen);
-                            HDIM(x0, x1, oz-45, `${Math.round(Math.abs(hBarEndPx - plate.maxX))} mm`);
-                        }
-
-                        // Vertical: VS bar end → nearest plate vertical edge (bottom or top)
-                        const veDraw = oz + (vBarEndPz - plate.minZ);
-                        const dBot   = Math.abs(veDraw - oz);
-                        const dTop   = Math.abs(veDraw - (oz + pWid));
-                        if (dBot <= dTop) {
-                            const z0 = Math.min(veDraw, oz), z1 = Math.max(veDraw, oz);
-                            VDIM(ox-45, z0, z1, `${Math.round(Math.abs(vBarEndPz - plate.minZ))} mm`);
-                        } else {
-                            const z0 = Math.min(veDraw, oz+pWid), z1 = Math.max(veDraw, oz+pWid);
-                            VDIM(ox-45, z0, z1, `${Math.round(Math.abs(vBarEndPz - plate.maxZ))} mm`);
-                        }
-                    }
-
-                    // ── Template name (inside plate, collision-aware) ──────────
+                    // ── Template name (dynamic font size, runs along longest side) ──
+                    // Font size computed from plate geometry then shrunk to avoid holes.
+                    // Strategy: centre on long axis, scan short axis for a collision-free row.
                     const nameTxt = [prodNum, cageRef, `${faceName}-${plateType}`, String(plate.id).padStart(3,'0')]
                         .filter(Boolean).join(' - ');
+                    const PAD = 4; // mm clearance inside plate edge
+                    const txtChars = nameTxt.length;
+
+                    // Max font size: text length must fit long axis; height must fit short axis
+                    const longAxis  = rot === 0 ? pLen : pWid;
+                    const shortAxis = rot === 0 ? pWid : pLen;
+                    const fsFromLong  = (longAxis  - PAD * 2) / (txtChars * 0.6);
+                    const fsFromShort = (shortAxis - PAD * 2);
+                    const FS_MAX = 20, FS_MIN = 2;
+                    const fsStart = Math.max(FS_MIN, Math.min(fsFromLong, fsFromShort, FS_MAX));
+
                     let placed = false;
-                    for (let fs = 1.0; fs >= 0.3 && !placed; fs = +(fs - 0.1).toFixed(1)) {
-                        // Try center of plate
-                        const tw = nameTxt.length * 0.6 * fs;
+                    // Step coarsely above 5mm, finely below
+                    outer: for (let fs = +fsStart.toFixed(1); fs >= FS_MIN && !placed; fs = +(fs - (fs > 5 ? 0.5 : 0.2)).toFixed(1)) {
+                        const tw = txtChars * 0.6 * fs;
                         const th = fs;
-                        let tx, ty;
                         if (rot === 0) {
-                            tx = ox + (pLen - tw) / 2;
-                            ty = oz + (pWid - th) / 2;
-                        } else { // 90°
-                            // For 90° text: insertion point = bottom-left of rotated text
-                            // text appears as column running upward
-                            tx = ox + (pLen + th) / 2;
-                            ty = oz + (pWid - tw) / 2;
-                        }
-                        if (textFits(tx, ty, nameTxt, fs, rot, plate.holes, ox, oz, pLen, pWid)) {
-                            TEXT(tx, ty, nameTxt, fs, 'TEXT', rot);
-                            placed = true;
+                            // Horizontal text: fix x at centre, scan y from top to bottom
+                            const txC = ox + (pLen - tw) / 2;
+                            for (let ty = oz + PAD; ty + th <= oz + pWid - PAD; ty += Math.max(0.5, th * 0.4)) {
+                                if (textFits(txC, ty, nameTxt, fs, rot, plate.holes, ox, oz, pLen, pWid)) {
+                                    TEXT(txC, ty, nameTxt, fs, 'TEXT', rot);
+                                    placed = true; break outer;
+                                }
+                            }
+                        } else {
+                            // 90° text: fix x at plate centre, scan ty (insertion = bottom of text col)
+                            const txC = ox + (pLen + th) / 2;
+                            for (let ty = oz + PAD; ty + tw <= oz + pWid - PAD; ty += Math.max(0.5, fs * 0.4)) {
+                                if (textFits(txC, ty, nameTxt, fs, rot, plate.holes, ox, oz, pLen, pWid)) {
+                                    TEXT(txC, ty, nameTxt, fs, 'TEXT', rot);
+                                    placed = true; break outer;
+                                }
+                            }
                         }
                     }
-                    // If still no fit (very crowded plate), place at minimum size at plate centroid
+                    // Fallback: minimum size at centroid, no collision check
                     if (!placed) {
-                        const fs = 0.3;
-                        const tx = rot === 0 ? ox + pLen/2 - nameTxt.length*0.6*fs/2 : ox + pLen/2;
-                        const ty = oz + pWid / 2;
-                        TEXT(tx, ty, nameTxt, fs, 'TEXT', rot);
+                        const fs = FS_MIN;
+                        const tw = txtChars * 0.6 * fs;
+                        const tx = rot === 0 ? ox + (pLen - tw) / 2 : ox + (pLen + fs) / 2;
+                        TEXT(tx, oz + pWid / 2, nameTxt, fs, 'TEXT', rot);
                     }
 
                     baseY += pWid + DRAW_PAD + PLATE_GAP;

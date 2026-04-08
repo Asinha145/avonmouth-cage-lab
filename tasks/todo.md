@@ -123,10 +123,32 @@
 
 ---
 
+## Session 4 — Template DXF Button + Backtest (09 Apr 2026)
+
+### H1 — Template DXF C01 Gate Fix ✅
+- [x] Template DXF button was hidden for any C01-rejected cage (gated by `rejected` flag)
+- [x] Removed `rejected` from gate — template DXF shows whenever VS/HS couplers present
+- [x] Rationale: formwork geometry is independent of bar schedule data quality; formwork must be
+      fabricated before the cage arrives — C01 rejection must not block it
+
+### H2 — BUG-01: Slab datumPz Fix ✅
+- [x] `_cageDatum()` used `Start_Z/End_Z` for `datumPz` on all cage types
+- [x] For slabs (`sepAxis='z'`), template DXF uses `pz = yMm − datumPz`; datumPz must be IFC-Y based
+- [x] Fixed: `datumPz = min(Start_Y, End_Y)` when `sepAxis === 'z'`
+- [x] Verified: RF35 pz coords now 95–1155mm (local scale) instead of ~6,220,000mm (BNG offset)
+
+### H3 — Full Backtest ✅
+- [x] P7349 C1 (wall, sepAxis='x'): F1A 74 holes / 8 plates, N1A 88 holes / 5 plates — entity counts exact ✓
+- [x] 1613 2HD70719AC1 (wall, sepAxis='y'): F1A 38 holes / 3 plates ✓
+- [x] RF35 C01 (slab, sepAxis='z'): T1A 62 holes / 4 plates, BUG-01 fix confirmed ✓
+- [x] All DXFs viewed in DXF Viewer — geometry correct (HS plates wide/flat, VS plates tall/narrow, slab plates horizontal)
+- [x] Regression test (test-dims.mjs): all 6 dimensions pass ✓
+
+---
+
 ## Pending
 
-- [ ] Test template DXF in AutoCAD — confirm colours, screw holes, bar-end dims, ZIP integrity
-- [ ] BUG-01: `_cageDatum()` uses `Start_Z/End_Z` for datumPz always; for slabs should use `Start_Y/End_Y` — affects DXF coupler plate positioning, not orange sphere markers
+- [ ] Test template DXF in AutoCAD — confirm colours, screw holes, bar-end dims (browser viewer confirmed)
 - [ ] N1A face orientation check — may need left-right mirror for "outside N1A" view
 - [ ] Title block fields: project name, originator logo, DRAWN/CHECKED/APPROVED names, Purpose of Issue
 

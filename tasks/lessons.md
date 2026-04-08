@@ -492,6 +492,44 @@ const nearestH = heightSide === 'top'
 
 ---
 
+## Template DXF Must Not Be Gated By C01 Rejection (Apr 2026)
+
+**Mistake:** Template DXF button was hidden when `_parserRejected === true`, using the same gate as EDB exports.
+
+**Root cause:** Applying a blanket "all exports blocked on rejection" rule to an output that depends only on coupler geometry, not bar schedule data. P7349 (a valid cage with well-defined IFCBEAM holes) is rejected due to 43 bars with missing Avonmouth Layer/Set psets — those bars are irrelevant to formwork plate geometry.
+
+**Rule:** Gate each export only on the data it actually depends on:
+- EDB exports → gate on `!rejected` (need accurate bar weights, layers, spans)
+- Template DXF → gate only on `hasVSHS` (needs IFCBEAM coupler positions only — independent of pset completeness)
+- C01 Report → gate on `!rejected` (is literally about rejection status)
+
+**Why:** Formwork plates must be ordered/fabricated before the cage arrives on site. A C01 data quality issue (e.g. missing pset on link bars) that has zero bearing on coupler geometry must never block the formwork drawing.
+
+**Correct gate (main.js):**
+```javascript
+templateDxfBtn.classList.toggle('hidden', !hasVSHS);  // NO rejected check
+```
+
+---
+
+## Slab datumPz Must Use IFC-Y, Not IFC-Z (Apr 2026)
+
+**Mistake:** `_cageDatum()` always derived `datumPz` from `Start_Z/End_Z` for all cage types. For slab cages (`sepAxis='z'`), the template DXF uses `pz = yMm − datumPz` — so `datumPz` must be in the same IFC axis (Y) as `yMm`. Using Z gave `pz ≈ IFC-Y − IFC-Z ≈ 6,220,000 mm` (BNG offset), producing plates millions of mm wide.
+
+**Rule:** In `_cageDatum()`, branch on `sepAxis`:
+```javascript
+const pzVals = faceBars.flatMap(b =>
+    sepAxis === 'z' ? [b.Start_Y, b.End_Y]   // slab: pz axis = IFC-Y
+                    : [b.Start_Z, b.End_Z]    // wall: pz axis = IFC-Z
+).filter(v => v != null);
+```
+
+**Verification:** RF35 T1A — before fix pz ≈ 6,220,000 mm. After fix: 95–1155 mm range (sensible local slab face coordinates). 4 plates, 62 holes confirmed correct in DXF viewer.
+
+**Note:** `_getDatumBarEnds()` is unaffected — it already returns `Start_Y/End_Y` for `faceSepAxis === 'z'` (line `vPzOf`), and subtracts `globalDatumPz` received as a parameter. The fix to `_cageDatum()` propagates automatically.
+
+---
+
 ## LB Coupler Holes — Position Gate Only (Apr 2026)
 
 **Rule:** Filter LB IFCBEAM by CartesianPoint position on the face separation axis.
