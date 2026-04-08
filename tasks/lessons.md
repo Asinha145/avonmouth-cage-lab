@@ -491,3 +491,24 @@ const nearestH = heightSide === 'top'
 **Also:** `_sceneSize()` must exclude datum markers themselves from the bbox calculation, otherwise the first marker inflates the "scene size" and the second marker gets sized larger, creating a positive feedback loop.
 
 ---
+
+## LB Coupler Holes — Outside-Mesh Position Check Required (Apr 2026)
+
+**Mistake:** All LB (Loose Bar) IFCBEAMs passed the layer filter unconditionally, including internal connections and perpendicular-face couplers (Y-facing in an X-sep cage). This placed wrong holes on the formwork template.
+
+**Root cause:** LB bars can run in any direction — unlike VS/HS which are always through-face by engineering convention. A Y-facing LB coupler in an X-sep wall cage pops through the end face (not the formwork face) and must be excluded.
+
+**Rule:** Filter LB beams by CartesianPoint position on the face separation axis:
+- If `beamVal < meshMin || beamVal > meshMax` on `sepAxis` → outside mesh → valid hole ✅
+- Otherwise → internal connection or wrong-face coupler → exclude ❌
+
+VS/HS keep unconditional inclusion — layer name is sufficient for them.
+
+**Verified on RF35_C01 slab (sepAxis='z'):**
+- 7 outside-mesh LB beams included (4 Z-facing below B1A + 3 X-facing below B1A)
+- 7 inside-mesh LB beams excluded
+- P7349 regression: unchanged at 162 holes (no LB layer present)
+
+**Key insight:** zAxis direction of the IFCBEAM is NOT a reliable gate for LB — outside-mesh LB beams can have any direction (Z-facing or X-facing). Only the CartesianPoint position is reliable.
+
+---
