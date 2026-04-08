@@ -1521,22 +1521,9 @@ function _parseIFCBeamHoles(ifcText) {
             const layer = b.layer || '';
             if (/^[VH]S/i.test(layer)) return true;
             if (/^LB/i.test(layer)) {
-                // Direction gate (primary): if barrel direction is known, use it.
-                // A barrel aligned with sepAxis penetrates the face regardless of
-                // where its origin sits (inside or outside the mesh).
-                // A barrel running parallel to the face (Y or Z for X-face) is never a hole.
-                // Threshold: cos45° = 0.707 — barrel within ±45° of face normal.
-                if (b.zDir) {
-                    const [dx, dy, dz] = b.zDir;
-                    const mag = Math.sqrt(dx*dx + dy*dy + dz*dz);
-                    if (mag > 0) {
-                        const faceComp = sepAxis === 'x' ? Math.abs(dx)
-                                       : sepAxis === 'y' ? Math.abs(dy)
-                                       :                   Math.abs(dz);
-                        return faceComp / mag >= 0.707;
-                    }
-                }
-                // Position fallback (no zDir): origin must be outside mesh on sepAxis
+                // Position gate: CartesianPoint (beam origin) must be outside the
+                // mesh void on sepAxis. This is the correct discriminant — LB through-face
+                // holes emerge beyond the F or N outer face, not from inside the cage void.
                 const beamVal = sepAxis === 'x' ? b.xMm : sepAxis === 'y' ? b.yMm : b.zMm;
                 return beamVal < meshMin || beamVal > meshMax;
             }
@@ -2433,17 +2420,16 @@ async function exportCombinedFaceDXF() {
                 .sort((a, b) => a.px !== b.px ? a.px - b.px : a.pz - b.pz);
             plotHoles.forEach((h, i) => { h.num = i + 1; });
 
-            // LB holes are drawn in their own side panel — exclude from face view
-            const vsHsHoles = plotHoles.filter(h => !/^LB/i.test(h.layer || ''));
-            for (const h of vsHsHoles) {
+            // All holes (VS + HS + LB) drawn at their face coordinates
+            for (const h of plotHoles) {
                 CIRCLE(h.px, baseZ + h.pz, h.holeDia / 2, 'HOLES');
                 TEXT(h.px + h.holeDia/2 + 3, baseZ + h.pz - 3,
                     `${cageRef}-CPLR-${String(h.num).padStart(3,'0')}`, 5, 'TEXT');
             }
 
-            // ── VS + HS Plate outlines (at actual face coordinates) ──────────
+            // ── Plate outlines — VS, HS, LB all at their face coordinates ────
             const { vsPlates, hsPlates, lbPlates } = _computePlates(plotHoles, 2000, 300);
-            for (const plate of [...vsPlates, ...hsPlates]) {
+            for (const plate of [...vsPlates, ...hsPlates, ...lbPlates]) {
                 const pType = `${plate.type}-PLATE-${String(plate.id).padStart(2,'0')}`;
                 LINE(plate.minX, baseZ+plate.minZ, plate.maxX, baseZ+plate.minZ, 'PLATE_OUTLINE');
                 LINE(plate.maxX, baseZ+plate.minZ, plate.maxX, baseZ+plate.maxZ, 'PLATE_OUTLINE');
@@ -2454,23 +2440,19 @@ async function exportCombinedFaceDXF() {
                     9, 'TEXT');
             }
 
-            // ── Dimension ticks (VS + HS holes only — LB dims in side panel) ──
-            const maxFacePx = vsHsHoles.length ? Math.max(...vsHsHoles.map(h => h.px)) : 0;
-            const maxFacePz = vsHsHoles.length ? Math.max(...vsHsHoles.map(h => h.pz)) : 0;
+            // ── Dimension ticks ───────────────────────────────────────────────
+            const maxFacePx = plotHoles.length ? Math.max(...plotHoles.map(h => h.px)) : 0;
+            const maxFacePz = plotHoles.length ? Math.max(...plotHoles.map(h => h.pz)) : 0;
 
-            // Overall span dims
             HDIM(0, maxFacePx, baseZ - 45, `${Math.round(maxFacePx)} mm`);
             VDIM(-55, baseZ, baseZ + maxFacePz, `${Math.round(maxFacePz)} mm`);
 
-            // X tick marks for each unique VS/HS hole X position
-            const uniqPx = [...new Set(vsHsHoles.map(h => Math.round(h.px)))].sort((a,b)=>a-b);
+            const uniqPx = [...new Set(plotHoles.map(h => Math.round(h.px)))].sort((a,b)=>a-b);
             for (const xv of uniqPx) {
                 LINE(xv, baseZ - 15, xv, baseZ - 28, 'DIMS');
                 TEXT(xv - 8, baseZ - 40, String(xv), 6, 'DIMS');
             }
-
-            // Z tick marks for each unique VS/HS hole Z position
-            const uniqPz = [...new Set(vsHsHoles.map(h => Math.round(h.pz)))].sort((a,b)=>a-b);
+            const uniqPz = [...new Set(plotHoles.map(h => Math.round(h.pz)))].sort((a,b)=>a-b);
             for (const zv of uniqPz) {
                 LINE(-15, baseZ + zv, -28, baseZ + zv, 'DIMS');
                 TEXT(-75, baseZ + zv - 3, String(zv), 6, 'DIMS');
@@ -2486,39 +2468,6 @@ async function exportCombinedFaceDXF() {
             TEXT(0, baseZ + maxFacePz + 5,
                 `Datum: bottom-left of outer face bars (IFC mm)  |  Hole dia = coupler OD + 2 mm tolerance`,
                 8, 'TEXT');
-
-            // ── LB Plates — side panel to the right of face elevation ────────
-            // Drawn at same baseZ + pz as the face so heights align, but offset
-            // in X by (maxFacePx + gap) so they never overlap the bar outlines.
-            const LB_X_GAP = 200;
-            const lbPlotHoles = plotHoles.filter(h => /^LB/i.test(h.layer || ''));
-            if (lbPlates.length > 0 && lbPlotHoles.length > 0) {
-                const lbOffX = maxFacePx + LB_X_GAP;
-                const lbMaxPx = Math.max(...lbPlotHoles.map(h => h.px));
-                // Vertical separator between face view and LB panel
-                const lbMaxPz = Math.max(...lbPlotHoles.map(h => h.pz));
-                const sepHeight = Math.max(maxFacePz, lbMaxPz);
-                LINE(maxFacePx + LB_X_GAP / 2, baseZ, maxFacePx + LB_X_GAP / 2, baseZ + sepHeight, 'DIMS');
-                TEXT(lbOffX, baseZ + maxFacePz + 20,
-                    `${faceName} — LB PLATES  |  ${lbPlates.length} plate${lbPlates.length !== 1 ? 's' : ''}  |  ${nLB} holes`,
-                    14, 'TEXT');
-                lbPlotHoles.forEach((h, i) => {
-                    CIRCLE(h.px + lbOffX, baseZ + h.pz, h.holeDia / 2, 'HOLES');
-                    TEXT(h.px + lbOffX + h.holeDia/2 + 3, baseZ + h.pz - 3,
-                        `${cageRef}-LB-${String(i + 1).padStart(3,'0')}`, 5, 'TEXT');
-                });
-                for (const plate of lbPlates) {
-                    const pType = `LB-PLATE-${String(plate.id).padStart(2,'0')}`;
-                    LINE(plate.minX+lbOffX, baseZ+plate.minZ, plate.maxX+lbOffX, baseZ+plate.minZ, 'PLATE_OUTLINE');
-                    LINE(plate.maxX+lbOffX, baseZ+plate.minZ, plate.maxX+lbOffX, baseZ+plate.maxZ, 'PLATE_OUTLINE');
-                    LINE(plate.maxX+lbOffX, baseZ+plate.maxZ, plate.minX+lbOffX, baseZ+plate.maxZ, 'PLATE_OUTLINE');
-                    LINE(plate.minX+lbOffX, baseZ+plate.maxZ, plate.minX+lbOffX, baseZ+plate.minZ, 'PLATE_OUTLINE');
-                    TEXT(plate.minX+lbOffX, baseZ+plate.maxZ+6,
-                        `${pType}  ${Math.round(plate.length)}×${Math.round(plate.width)} mm  (${plate.holes.length} holes)`,
-                        9, 'TEXT');
-                }
-                contentMaxX = Math.max(contentMaxX, lbOffX + lbMaxPx);
-            }
 
             // Track content bounding box
             contentMaxX = Math.max(contentMaxX, maxFacePx);

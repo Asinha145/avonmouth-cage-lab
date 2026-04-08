@@ -492,26 +492,16 @@ const nearestH = heightSide === 'top'
 
 ---
 
-## LB Coupler Holes — Direction Gate Primary, Position Fallback (Apr 2026)
+## LB Coupler Holes — Position Gate Only (Apr 2026)
 
-**Mistake (v1):** All LB IFCBEAMs passed unconditionally → Y/Z-barrel beams included as wrong-face holes.
-**Mistake (v2):** Position-only gate (`origin outside mesh bbox`) → excluded X-barrel beams straddling F/N faces whose origins sit *inside* the mesh but whose barrels run straight through the face.
-
-**Root cause:** LB bars can run in any direction. The CartesianPoint is the beam ORIGIN (one end), not a face-intersection point. A beam with origin inside the mesh and barrel aligned to the face normal IS a through-face hole — but the position gate incorrectly excludes it.
-
-**Correct rule — two-gate with direction primary:**
-1. **If `zDir` known (from IFCAXIS2PLACEMENT3D Axis vector):** direction gate only.
-   - `|faceComponent| / magnitude ≥ cos45° (0.707)` → aligned with face normal → include ✅
-   - Otherwise → barrel runs parallel/perpendicular to face → exclude ❌
-   - Position is irrelevant when direction is known.
-2. **If `zDir` absent:** fall back to position gate (`origin outside mesh bbox on sepAxis`).
+**Rule:** Filter LB IFCBEAM by CartesianPoint position on the face separation axis.
+- `beamVal < meshMin || beamVal > meshMax` on `sepAxis` → outside the void → valid hole ✅
+- Otherwise → inside the cage void → exclude ❌
 
 VS/HS keep unconditional inclusion — always through-face by engineering convention.
 
-**Verified on 2HL10712AC1 ICOS wall (sepAxis='x'), 60 LB beams:**
-- `(1,0,0)`: 16 ✓ `(-1,0,0)`: 17 ✓ → 33 through-face holes (origins inside mesh, correctly included)
-- `(0,1,0)`: 12 ✗ `(0,0,1)`: 14 ✗ `(0,0,-1)`: 1 ✗ → correctly excluded
+**Do not use zAxis barrel direction as a filter gate.** The barrel direction is useful for classifying hole type (VS-like vs HS-like) but not for deciding inclusion. An LB beam outside the void is through-face regardless of its barrel direction encoding in the IFC.
 
-**Implementation:** `_parseIFCBeamHoles` extracts `refs[1]` from IFCAXIS2PLACEMENT3D (the Axis vector entity), resolves the IFCDIRECTION, stores as `zDir:[dx,dy,dz]` on each beam. Filter reads `b.zDir` first; position check is the else branch.
+**Deviation warning:** We spent several commits using barrel direction as the primary gate after finding mixed zDir values in 2HL10712AC1 (60 LB beams, zDir ∈ {(1,0,0),(−1,0,0),(0,1,0),(0,0,1)}). This was wrong — it caused correct through-face holes to be excluded when their origin was inside the mesh. The position-outside-void rule is the correct and stable discriminant.
 
 ---
