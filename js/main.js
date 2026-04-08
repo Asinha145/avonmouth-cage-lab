@@ -1593,9 +1593,39 @@ function _computePlates(plotHoles, maxLength, maxWidth) {
     const hsOri = { bandKey: 'pz', groupKey: 'px' };             // HS always long=X (horizontal along cage length)
     const lbOri = getOrientation(lbHoles);                        // LB: auto-detect same as VS
 
-    const vsPlates = bandAndGroup(vsHoles, vsOri.bandKey, vsOri.groupKey).map((h, i) => toPlate(h, i, 'VS'));
-    const hsPlates = bandAndGroup(hsHoles, hsOri.bandKey, hsOri.groupKey).map((h, i) => toPlate(h, i, 'HS'));
-    const lbPlates = bandAndGroup(lbHoles, lbOri.bandKey, lbOri.groupKey).map((h, i) => toPlate(h, i, 'LB'));
+    // Merge overlapping plates of the same type: when the 25mm clearance zones of
+    // two adjacent plates touch or overlap, combine them into a single plate.
+    function mergePlates(rawPlates, type) {
+        if (rawPlates.length < 2) return rawPlates;
+        let result = [...rawPlates];
+        let changed = true;
+        while (changed) {
+            changed = false;
+            const used = new Set();
+            const next = [];
+            for (let i = 0; i < result.length; i++) {
+                if (used.has(i)) continue;
+                let p = result[i];
+                for (let j = i + 1; j < result.length; j++) {
+                    if (used.has(j)) continue;
+                    const q = result[j];
+                    if (p.minX < q.maxX && p.maxX > q.minX &&
+                        p.minZ < q.maxZ && p.maxZ > q.minZ) {
+                        p = toPlate([...p.holes, ...q.holes], 0, type);
+                        used.add(j);
+                        changed = true;
+                    }
+                }
+                next.push(p);
+            }
+            result = next;
+        }
+        return result.map((p, k) => ({ ...p, id: k + 1 }));
+    }
+
+    const vsPlates = mergePlates(bandAndGroup(vsHoles, vsOri.bandKey, vsOri.groupKey).map((h, i) => toPlate(h, i, 'VS')), 'VS');
+    const hsPlates = mergePlates(bandAndGroup(hsHoles, hsOri.bandKey, hsOri.groupKey).map((h, i) => toPlate(h, i, 'HS')), 'HS');
+    const lbPlates = mergePlates(bandAndGroup(lbHoles, lbOri.bandKey, lbOri.groupKey).map((h, i) => toPlate(h, i, 'LB')), 'LB');
 
     return { vsPlates, hsPlates, lbPlates };
 }
@@ -2379,9 +2409,9 @@ async function exportCombinedFaceDXF() {
                     `${cageRef}-CPLR-${String(h.num).padStart(3,'0')}`, 5, 'TEXT');
             }
 
-            // ── Plate outlines (at actual face coordinates) ───────────────────
+            // ── VS + HS Plate outlines (at actual face coordinates) ──────────
             const { vsPlates, hsPlates, lbPlates } = _computePlates(plotHoles, 2000, 300);
-            for (const plate of [...vsPlates, ...hsPlates, ...lbPlates]) {
+            for (const plate of [...vsPlates, ...hsPlates]) {
                 const pType = `${plate.type}-PLATE-${String(plate.id).padStart(2,'0')}`;
                 LINE(plate.minX, baseZ+plate.minZ, plate.maxX, baseZ+plate.minZ, 'PLATE_OUTLINE');
                 LINE(plate.maxX, baseZ+plate.minZ, plate.maxX, baseZ+plate.maxZ, 'PLATE_OUTLINE');
@@ -2425,12 +2455,40 @@ async function exportCombinedFaceDXF() {
                 `Datum: bottom-left of outer face bars (IFC mm)  |  Hole dia = coupler OD + 2 mm tolerance`,
                 8, 'TEXT');
 
+            // ── LB Plates — separate sub-section below face elevation ─────────
+            const LB_SUBSEC_GAP = 100;
+            const lbPlotHoles = plotHoles.filter(h => /^LB/i.test(h.layer || ''));
+            let lbSectionHeight = 0;
+            if (lbPlates.length > 0 && lbPlotHoles.length > 0) {
+                const lbBaseZ = baseZ + maxFacePz + HEADER_H + LB_SUBSEC_GAP;
+                const lbMaxPz = Math.max(...lbPlotHoles.map(h => h.pz));
+                const lbMaxPx = Math.max(...lbPlotHoles.map(h => h.px));
+                TEXT(0, lbBaseZ + lbMaxPz + 20,
+                    `${faceName} — LB PLATES  |  ${lbPlates.length} plate${lbPlates.length !== 1 ? 's' : ''}  |  ${nLB} holes`,
+                    14, 'TEXT');
+                for (const h of lbPlotHoles) {
+                    CIRCLE(h.px, lbBaseZ + h.pz, h.holeDia / 2, 'HOLES');
+                }
+                for (const plate of lbPlates) {
+                    const pType = `LB-PLATE-${String(plate.id).padStart(2,'0')}`;
+                    LINE(plate.minX, lbBaseZ+plate.minZ, plate.maxX, lbBaseZ+plate.minZ, 'PLATE_OUTLINE');
+                    LINE(plate.maxX, lbBaseZ+plate.minZ, plate.maxX, lbBaseZ+plate.maxZ, 'PLATE_OUTLINE');
+                    LINE(plate.maxX, lbBaseZ+plate.maxZ, plate.minX, lbBaseZ+plate.maxZ, 'PLATE_OUTLINE');
+                    LINE(plate.minX, lbBaseZ+plate.maxZ, plate.minX, lbBaseZ+plate.minZ, 'PLATE_OUTLINE');
+                    TEXT(plate.minX, lbBaseZ+plate.maxZ+6,
+                        `${pType}  ${Math.round(plate.length)}×${Math.round(plate.width)} mm  (${plate.holes.length} holes)`,
+                        9, 'TEXT');
+                }
+                lbSectionHeight = LB_SUBSEC_GAP + lbMaxPz + HEADER_H;
+                contentMaxX = Math.max(contentMaxX, lbMaxPx);
+            }
+
             // Track content bounding box
             contentMaxX = Math.max(contentMaxX, maxFacePx);
-            contentMaxZ = baseZ + maxFacePz + HEADER_H;
+            contentMaxZ = baseZ + maxFacePz + HEADER_H + lbSectionHeight;
 
             // Advance baseZ for next section
-            baseZ += maxFacePz + HEADER_H + SECTION_GAP + DIM_BELOW;
+            baseZ += maxFacePz + HEADER_H + lbSectionHeight + SECTION_GAP + DIM_BELOW;
         }
 
         // ── Drawing border + title block (A0 landscape, 1:15) ────────────────
