@@ -1419,17 +1419,31 @@ function _parseIFCBeamHoles(ifcText) {
     const getEntity = id => entityMap.get(String(id)) ?? null;
     const parseCoords = s => [...s.matchAll(/[-+]?\d+\.?\d*(?:[Ee][+-]?\d+)?/g)].map(m => parseFloat(m[0]));
 
-    // Placement lookup: lpId → [X, Y, Z]
-    // Tekla encodes global BNG coords directly in each element's own IFCAXIS2PLACEMENT3D
-    // regardless of whether the IFCLOCALPLACEMENT has a parent ref or $ (absolute).
-    const absPos = {};
+    // Placement lookup: lpId → { pos:[X,Y,Z], zDir:[dx,dy,dz]|null }
+    // Tekla encodes global BNG coords directly in each element's own IFCAXIS2PLACEMENT3D.
+    // Also extract the Axis (zDir) — the barrel direction of the coupler/strut.
+    // IFCAXIS2PLACEMENT3D(#cpId, #axisId, #refDirId): refs[0]=position, refs[1]=z-axis.
+    const placementInfo = {};
     for (const m of ifcText.matchAll(/#(\d+)=IFCLOCALPLACEMENT\([^,)]*,#(\d+)\)/g)) {
         const [, lpId, axId] = m;
         const ax = getEntity(axId); if (!ax?.includes('IFCAXIS2PLACEMENT3D')) continue;
-        const cpId = ax.match(/#(\d+)/)?.[1]; if (!cpId) continue;
+        const refs = [...ax.matchAll(/#(\d+)/g)].map(r => r[1]);
+        const cpId = refs[0]; if (!cpId) continue;
         const cp = getEntity(cpId); if (!cp?.includes('IFCCARTESIANPOINT')) continue;
         const inner = cp.match(/\(([^)]+)\)/)?.[1]; if (!inner) continue;
-        const c = parseCoords(inner); if (c.length === 3) absPos[lpId] = c;
+        const c = parseCoords(inner); if (c.length !== 3) continue;
+        // zAxis direction — second ref in IFCAXIS2PLACEMENT3D (Axis vector)
+        let zDir = null;
+        const axisId = refs[1];
+        if (axisId) {
+            const axVec = getEntity(axisId);
+            if (axVec?.includes('IFCDIRECTION')) {
+                const axInner = axVec.match(/\(([^)]+)\)/)?.[1];
+                const d = parseCoords(axInner);
+                if (d.length === 3) zDir = d;
+            }
+        }
+        placementInfo[lpId] = { pos: c, zDir };
     }
 
     // Coupler OD per IFCBEAM from ATK EMBEDMENTS pset HEIGHT
@@ -1466,22 +1480,22 @@ function _parseIFCBeamHoles(ifcText) {
         }
     }
 
-    // Collect all IFCBEAM positions
+    // Collect all IFCBEAM positions + barrel direction
     const beams = [];
     for (const m of ifcText.matchAll(/#(\d+)=IFCBEAM\(([^;]+);/g)) {
         const [, bid, bdata] = m;
         for (const ref of bdata.matchAll(/#(\d+)/g)) {
-            if (absPos[ref[1]]) {
-                const [bx, by, bz] = absPos[ref[1]];
-                // Primary OD: ATK EMBEDMENTS pset HEIGHT (set earlier in beamOD map)
-                // Fallback OD: ICOS/other contractors encode diameter in IFCBEAM ObjectType/Description
-                //   as 'PD{n}*...' (e.g. 'PD47*5' → 47 mm, 'PD40*12.5' → 40 mm)
+            const info = placementInfo[ref[1]];
+            if (info) {
+                const [bx, by, bz] = info.pos;
+                // Primary OD: ATK EMBEDMENTS pset HEIGHT
+                // Fallback OD: ICOS 'PD{n}*' in ObjectType/Description
                 let od = beamOD[bid] ?? null;
                 if (od === null) {
                     const pdM = bdata.match(/'PD(\d+)\*/);
                     if (pdM) od = parseFloat(pdM[1]);
                 }
-                beams.push({ xMm: bx, yMm: by, zMm: bz, od, layer: beamLayer[bid] ?? null });
+                beams.push({ xMm: bx, yMm: by, zMm: bz, od, layer: beamLayer[bid] ?? null, zDir: info.zDir });
                 break;
             }
         }
@@ -1507,8 +1521,23 @@ function _parseIFCBeamHoles(ifcText) {
             const layer = b.layer || '';
             if (/^[VH]S/i.test(layer)) return true;
             if (/^LB/i.test(layer)) {
+                // Gate 1 — CartesianPoint must be outside mesh bbox on sepAxis
                 const beamVal = sepAxis === 'x' ? b.xMm : sepAxis === 'y' ? b.yMm : b.zMm;
-                return beamVal < meshMin || beamVal > meshMax;
+                if (beamVal >= meshMin && beamVal <= meshMax) return false;
+                // Gate 2 — barrel (zAxis) must be aligned with the face normal (sepAxis).
+                // A Y-direction barrel on an X-face runs parallel to the face — not a through-face hole.
+                // Threshold cos45° = 0.707: barrel within ±45° of face normal qualifies.
+                if (b.zDir) {
+                    const [dx, dy, dz] = b.zDir;
+                    const mag = Math.sqrt(dx*dx + dy*dy + dz*dz);
+                    if (mag > 0) {
+                        const faceComp = sepAxis === 'x' ? Math.abs(dx)
+                                       : sepAxis === 'y' ? Math.abs(dy)
+                                       :                   Math.abs(dz);
+                        if (faceComp / mag < 0.707) return false;
+                    }
+                }
+                return true;
             }
             return false;
         })
