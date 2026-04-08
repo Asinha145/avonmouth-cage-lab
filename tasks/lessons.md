@@ -492,23 +492,26 @@ const nearestH = heightSide === 'top'
 
 ---
 
-## LB Coupler Holes — Outside-Mesh Position Check Required (Apr 2026)
+## LB Coupler Holes — Direction Gate Primary, Position Fallback (Apr 2026)
 
-**Mistake:** All LB (Loose Bar) IFCBEAMs passed the layer filter unconditionally, including internal connections and perpendicular-face couplers (Y-facing in an X-sep cage). This placed wrong holes on the formwork template.
+**Mistake (v1):** All LB IFCBEAMs passed unconditionally → Y/Z-barrel beams included as wrong-face holes.
+**Mistake (v2):** Position-only gate (`origin outside mesh bbox`) → excluded X-barrel beams straddling F/N faces whose origins sit *inside* the mesh but whose barrels run straight through the face.
 
-**Root cause:** LB bars can run in any direction — unlike VS/HS which are always through-face by engineering convention. A Y-facing LB coupler in an X-sep wall cage pops through the end face (not the formwork face) and must be excluded.
+**Root cause:** LB bars can run in any direction. The CartesianPoint is the beam ORIGIN (one end), not a face-intersection point. A beam with origin inside the mesh and barrel aligned to the face normal IS a through-face hole — but the position gate incorrectly excludes it.
 
-**Rule:** Filter LB beams by CartesianPoint position on the face separation axis:
-- If `beamVal < meshMin || beamVal > meshMax` on `sepAxis` → outside mesh → valid hole ✅
-- Otherwise → internal connection or wrong-face coupler → exclude ❌
+**Correct rule — two-gate with direction primary:**
+1. **If `zDir` known (from IFCAXIS2PLACEMENT3D Axis vector):** direction gate only.
+   - `|faceComponent| / magnitude ≥ cos45° (0.707)` → aligned with face normal → include ✅
+   - Otherwise → barrel runs parallel/perpendicular to face → exclude ❌
+   - Position is irrelevant when direction is known.
+2. **If `zDir` absent:** fall back to position gate (`origin outside mesh bbox on sepAxis`).
 
-VS/HS keep unconditional inclusion — layer name is sufficient for them.
+VS/HS keep unconditional inclusion — always through-face by engineering convention.
 
-**Verified on RF35_C01 slab (sepAxis='z'):**
-- 7 outside-mesh LB beams included (4 Z-facing below B1A + 3 X-facing below B1A)
-- 7 inside-mesh LB beams excluded
-- P7349 regression: unchanged at 162 holes (no LB layer present)
+**Verified on 2HL10712AC1 ICOS wall (sepAxis='x'), 60 LB beams:**
+- `(1,0,0)`: 16 ✓ `(-1,0,0)`: 17 ✓ → 33 through-face holes (origins inside mesh, correctly included)
+- `(0,1,0)`: 12 ✗ `(0,0,1)`: 14 ✗ `(0,0,-1)`: 1 ✗ → correctly excluded
 
-**Key insight:** zAxis direction of the IFCBEAM is NOT a reliable gate for LB — outside-mesh LB beams can have any direction (Z-facing or X-facing). Only the CartesianPoint position is reliable.
+**Implementation:** `_parseIFCBeamHoles` extracts `refs[1]` from IFCAXIS2PLACEMENT3D (the Axis vector entity), resolves the IFCDIRECTION, stores as `zDir:[dx,dy,dz]` on each beam. Filter reads `b.zDir` first; position check is the else branch.
 
 ---
