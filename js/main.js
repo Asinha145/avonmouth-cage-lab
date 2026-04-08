@@ -427,10 +427,13 @@ function displayCageDimensionBoxes() {
     document.getElementById('dim-height').textContent = fmt(heightVal);
 
     // Box4: Couplered Bars
+    // VS/HS strut bars are always coupled by definition.
+    // LB link bars are coupled only when their shape code carries a coupler suffix.
     const hasCoupler = allData.some(b => {
-        const av  = (b.Avonmouth_Layer_Set || '').toUpperCase();
-        const atk = (b.ATK_Layer_Name || '').toUpperCase();
-        return /^(VS|HS|LB)\d*$/.test(av) && (atk.includes('CPLR') || b.Has_Coupler || !!b.Coupler_Suffix);
+        const av = (b.Avonmouth_Layer_Set || '').toUpperCase();
+        if (/^[VH]S\d*$/.test(av)) return true;
+        if (/^LB\d*$/.test(av) && b.Coupler_Suffix) return true;
+        return false;
     });
     const couplerEl = document.getElementById('dim-coupler');
     couplerEl.textContent = hasCoupler ? 'Yes' : 'No';
