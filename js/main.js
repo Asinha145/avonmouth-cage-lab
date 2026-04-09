@@ -2880,75 +2880,62 @@ async function exportTemplateDXF(maxLength, maxWidth) {
                         }
                     }
 
-                    // ── Template name (dynamic font size, runs along longest side) ──
-                    // Font size computed from plate geometry then shrunk to avoid holes.
-                    // Strategy: centre on long axis, scan short axis for a collision-free row.
+                    // ── Template name: sized to fit the widest gap between hole rows/cols ──
+                    // rot=0 (wide/HS): long=pLen, short=pWid; gaps along pz (short axis)
+                    // rot=90 (tall/VS): long=pWid, short=pLen; gaps along px (short axis)
                     const nameTxt = [prodNum, cageRef, `${faceName}-${plateType}`, String(plate.id).padStart(3,'0')]
                         .filter(Boolean).join(' - ');
-                    const PAD = 4; // mm clearance inside plate edge
+                    const PAD = 4;
                     const txtChars = nameTxt.length;
+                    const FS_MAX = 20, FS_MIN = 2;
 
-                    // Max font size: text length must fit long axis; height must fit short axis
                     const longAxis  = rot === 0 ? pLen : pWid;
                     const shortAxis = rot === 0 ? pWid : pLen;
-                    const fsFromLong  = (longAxis  - PAD * 2) / (txtChars * 0.6);
-                    const fsFromShort = (shortAxis - PAD * 2);
-                    const FS_MAX = 20, FS_MIN = 2;
-                    const fsStart = Math.max(FS_MIN, Math.min(fsFromLong, fsFromShort, FS_MAX));
 
-                    let placed = false;
-                    // Step coarsely above 5mm, finely below
-                    outer: for (let fs = +fsStart.toFixed(1); fs >= FS_MIN && !placed; fs = +(fs - (fs > 5 ? 0.5 : 0.2)).toFixed(1)) {
-                        const tw = txtChars * 0.6 * fs;
-                        const th = fs;
-                        if (rot === 0) {
-                            // Horizontal text: fix x at centre, scan y 1mm steps
-                            const txC = ox + (pLen - tw) / 2;
-                            for (let ty = oz + PAD; ty + th <= oz + pWid - PAD; ty += 1) {
-                                if (textFits(txC, ty, nameTxt, fs, rot, plate.holes, ox, oz, pLen, pWid)) {
-                                    TEXT(txC, ty, nameTxt, fs, 'TEXT', rot);
-                                    placed = true; break outer;
-                                }
-                            }
-                        } else {
-                            // 90° text: fix x at plate centre, scan ty 1mm steps
-                            const txC = ox + (pLen + th) / 2;
-                            for (let ty = oz + PAD; ty + tw <= oz + pWid - PAD; ty += 1) {
-                                if (textFits(txC, ty, nameTxt, fs, rot, plate.holes, ox, oz, pLen, pWid)) {
-                                    TEXT(txC, ty, nameTxt, fs, 'TEXT', rot);
-                                    placed = true; break outer;
-                                }
-                            }
-                        }
+                    // Project hole centres onto the short axis (local plate coords)
+                    const shortProj = h => rot === 0 ? (h.pz - plate.minZ) : (h.px - plate.minX);
+                    const rawBands  = plate.holes.map(h => ({ pos: shortProj(h), r: h.holeDia / 2 }));
+
+                    // Group into bands by proximity (±5 mm tolerance)
+                    const bands = [];
+                    for (const h of rawBands) {
+                        const b = bands.find(b => Math.abs(b.centre - h.pos) < 5);
+                        if (b) { b.r = Math.max(b.r, h.r); }
+                        else    { bands.push({ centre: h.pos, r: h.r }); }
                     }
-                    // Fallback: scan at FS_MIN with 1mm steps rather than blindly placing at centroid
-                    if (!placed) {
-                        const fs = FS_MIN;
+                    bands.sort((a, b) => a.centre - b.centre);
+
+                    // Build gap list: plate edges + spaces between adjacent bands
+                    const pS = PAD, pE = shortAxis - PAD;
+                    const gapList = [];
+                    gapList.push({ lo: pS, hi: bands.length ? bands[0].centre - bands[0].r : pE });
+                    for (let i = 0; i < bands.length - 1; i++) {
+                        gapList.push({ lo: bands[i].centre + bands[i].r, hi: bands[i+1].centre - bands[i+1].r });
+                    }
+                    if (bands.length) {
+                        gapList.push({ lo: bands[bands.length-1].centre + bands[bands.length-1].r, hi: pE });
+                    }
+
+                    // Pick widest usable gap
+                    const usableGaps = gapList
+                        .map(g => ({ centre: (g.lo + g.hi) / 2, clear: g.hi - g.lo }))
+                        .filter(g => g.clear >= FS_MIN)
+                        .sort((a, b) => b.clear - a.clear);
+
+                    const bestGap    = usableGaps[0] ?? { centre: shortAxis / 2, clear: shortAxis - PAD * 2 };
+                    const fsFromLong = (longAxis - PAD * 2) / (txtChars * 0.6);
+                    const fs         = Math.max(FS_MIN, Math.min(fsFromLong, bestGap.clear, FS_MAX));
+
+                    // Place analytically: centred on long axis, centred in best gap on short axis
+                    if (rot === 0) {
+                        // Horizontal: x centred on pLen, y = gap centre - fs/2
                         const tw = txtChars * 0.6 * fs;
-                        const th = fs;
-                        let fbPlaced = false;
-                        if (rot === 0) {
-                            const txC = ox + (pLen - tw) / 2;
-                            for (let ty = oz + PAD; ty + th <= oz + pWid - PAD; ty += 1) {
-                                if (textFits(txC, ty, nameTxt, fs, rot, plate.holes, ox, oz, pLen, pWid)) {
-                                    TEXT(txC, ty, nameTxt, fs, 'TEXT', rot);
-                                    fbPlaced = true; break;
-                                }
-                            }
-                        } else {
-                            const txC = ox + (pLen + th) / 2;
-                            for (let ty = oz + PAD; ty + tw <= oz + pWid - PAD; ty += 1) {
-                                if (textFits(txC, ty, nameTxt, fs, rot, plate.holes, ox, oz, pLen, pWid)) {
-                                    TEXT(txC, ty, nameTxt, fs, 'TEXT', rot);
-                                    fbPlaced = true; break;
-                                }
-                            }
-                        }
-                        // Last resort: centroid (no collision check — plate too crowded)
-                        if (!fbPlaced) {
-                            const tx = rot === 0 ? ox + (pLen - tw) / 2 : ox + (pLen + fs) / 2;
-                            TEXT(tx, oz + pWid / 2, nameTxt, fs, 'TEXT', rot);
-                        }
+                        TEXT(ox + (pLen - tw) / 2, oz + bestGap.centre - fs / 2, nameTxt, fs, 'TEXT', rot);
+                    } else {
+                        // 90°: txC at gap centre on pLen (x), ty centred on pWid (y)
+                        // DXF 90° text: insertion=(tx,ty), x-extent=[tx-fs, tx], y-extent=[ty, ty+tw]
+                        const tw = txtChars * 0.6 * fs;
+                        TEXT(ox + bestGap.centre + fs / 2, oz + (pWid - tw) / 2, nameTxt, fs, 'TEXT', rot);
                     }
 
                     baseY += pWid + DRAW_PAD + PLATE_GAP;
