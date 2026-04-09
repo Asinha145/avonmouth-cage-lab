@@ -130,6 +130,8 @@ class Viewer3D {
         this._cogSumX = 0; this._cogSumY = 0; this._cogSumZ = 0;
         this._cogWeightSum = 0; this._cogBarsUsed = 0;
         this._cogPos = null;
+        // PRL/PRC deferred — centroids slid into mesh envelope after stream (meshBbox known)
+        this._preloadPending = [];
 
         // Reset bboxes
         const _emptyBbox = () => ({
@@ -233,12 +235,21 @@ class Viewer3D {
                     sz += sv * (z0 + z1 + z2) / 4;
                 }
                 if (Math.abs(volSum) > 1e-15) {
-                    const w = bar.Formula_Weight;
-                    this._cogWeightSum += w;
-                    this._cogSumX += w * (sx / volSum);
-                    this._cogSumY += w * (sy / volSum);
-                    this._cogSumZ += w * (sz / volSum);
-                    this._cogBarsUsed++;
+                    const w  = bar.Formula_Weight;
+                    const cx = sx / volSum, cy = sy / volSum, cz = sz / volSum;
+                    const lyr = (bar.Avonmouth_Layer_Set || '').toUpperCase();
+                    const isPRL = /^PRL/.test(lyr);
+                    const isPRC = /^PRC/.test(lyr);
+                    if (isPRL || isPRC) {
+                        // Defer: meshBbox not fully built yet — slide after stream
+                        this._preloadPending.push({ cx, cy, cz, w, isPRL, isPRC, bar });
+                    } else {
+                        this._cogWeightSum += w;
+                        this._cogSumX += w * cx;
+                        this._cogSumY += w * cy;
+                        this._cogSumZ += w * cz;
+                        this._cogBarsUsed++;
+                    }
                 }
             }
 
@@ -267,6 +278,58 @@ class Viewer3D {
         });
 
         this.ifcapi.CloseModel(modelID);
+
+        // Slide PRL/PRC into mesh envelope then fold into COG sums
+        if (this._preloadPending.length > 0) {
+            const mb = this.meshBbox;
+            const hasMesh = mb.minX !== Infinity;
+            // Length axis = whichever horizontal span of mesh is larger
+            const mxSpan  = hasMesh ? mb.maxX - mb.minX : 0;
+            const mzSpan  = hasMesh ? mb.maxZ - mb.minZ : 0;
+            const lenAxis = mxSpan >= mzSpan ? 'x' : 'z';
+            let nSlid = 0;
+            for (const p of this._preloadPending) {
+                let { cx, cy, cz, w, isPRL, isPRC, bar } = p;
+                if (hasMesh && bar.Start_X != null && bar.End_X != null) {
+                    // Bar endpoints in engine coords
+                    const s_ex = bar.Start_X / 1000, s_ey = bar.Start_Z / 1000, s_ez = -bar.Start_Y / 1000;
+                    const e_ex = bar.End_X   / 1000, e_ey = bar.End_Z   / 1000, e_ez = -bar.End_Y   / 1000;
+                    if (isPRL) {
+                        const meshMin = lenAxis === 'x' ? mb.minX : mb.minZ;
+                        const meshMax = lenAxis === 'x' ? mb.maxX : mb.maxZ;
+                        const s_l = lenAxis === 'x' ? s_ex : s_ez;
+                        const e_l = lenAxis === 'x' ? e_ex : e_ez;
+                        const barMin = Math.min(s_l, e_l), barMax = Math.max(s_l, e_l);
+                        let delta = 0;
+                        if      (barMax > meshMax) delta = meshMax - barMax;
+                        else if (barMin < meshMin) delta = meshMin - barMin;
+                        if (delta !== 0) {
+                            if (lenAxis === 'x') cx += delta; else cz += delta;
+                            nSlid++;
+                            console.log(`[COG] PRL slid ${(delta*1000).toFixed(0)}mm: ${bar.Avonmouth_Layer_Set || bar.Entity_ID}`);
+                        }
+                    }
+                    if (isPRC) {
+                        const meshMin = mb.minY, meshMax = mb.maxY;
+                        const barMin = Math.min(s_ey, e_ey), barMax = Math.max(s_ey, e_ey);
+                        let delta = 0;
+                        if      (barMax > meshMax) delta = meshMax - barMax;
+                        else if (barMin < meshMin) delta = meshMin - barMin;
+                        if (delta !== 0) {
+                            cy += delta;
+                            nSlid++;
+                            console.log(`[COG] PRC slid ${(delta*1000).toFixed(0)}mm: ${bar.Avonmouth_Layer_Set || bar.Entity_ID}`);
+                        }
+                    }
+                }
+                this._cogWeightSum += w;
+                this._cogSumX += w * cx;
+                this._cogSumY += w * cy;
+                this._cogSumZ += w * cz;
+                this._cogBarsUsed++;
+            }
+            if (nSlid > 0) console.log(`[COG] ${nSlid} preload bar(s) slid into mesh envelope for transport COG`);
+        }
 
         this._cogPos = (this._cogWeightSum > 0) ? {
             ex: this._cogSumX / this._cogWeightSum,
