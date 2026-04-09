@@ -457,6 +457,10 @@ function _updateDimBoxesFromBREP(dims) {
     document.getElementById('dim-width').textContent  = fmt(dims.overallWidth);
     document.getElementById('dim-length').textContent = fmt(dims.overallLength);
     document.getElementById('dim-height').textContent = fmt(dims.height);
+    if (dims.cog) {
+        document.getElementById('dim-cog-height').textContent = fmt(dims.cog.heightFromBase);
+        console.log(`[COG] IFC X=${dims.cog.ifcX} Y=${dims.cog.ifcY} Z=${dims.cog.ifcZ} mm | ${dims.cog.totalWeight.toFixed(1)} kg | ${dims.cog.barsUsed} bars`);
+    }
     // Re-run EDB auto-fill and refresh height cards now that accurate WASM dims are available
     autoFillEDBInputs();
     displayMeshHeightStats();

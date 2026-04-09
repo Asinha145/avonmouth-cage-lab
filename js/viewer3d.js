@@ -33,6 +33,7 @@ class Viewer3D {
         this._datumMarker       = null;
         this._layerDatumMarkers = [];
         this._plateBoxes        = [];
+        this._cogMarker         = null;
         this.renderer           = null;
         this.ifcapi      = null;
 
@@ -123,6 +124,12 @@ class Viewer3D {
         this.meshByExpId.clear();
         this._plateBoxes = [];
         this._layerDatumMarkers = [];
+        this._cogMarker = null;
+
+        // COG accumulators — mass-weighted BREP centroid
+        this._cogSumX = 0; this._cogSumY = 0; this._cogSumZ = 0;
+        this._cogWeightSum = 0; this._cogBarsUsed = 0;
+        this._cogPos = null;
 
         // Reset bboxes
         const _emptyBbox = () => ({
@@ -210,6 +217,31 @@ class Viewer3D {
 
             if (allPos.length === 0) return;
 
+            // BREP solid centroid via divergence theorem — for mass-weighted COG
+            if (bar && bar.Formula_Weight > 0 && allIdx.length >= 3) {
+                let volSum = 0, sx = 0, sy = 0, sz = 0;
+                for (let i = 0; i < allIdx.length; i += 3) {
+                    const i0 = allIdx[i]*3,   i1 = allIdx[i+1]*3, i2 = allIdx[i+2]*3;
+                    const x0 = allPos[i0],   y0 = allPos[i0+1], z0 = allPos[i0+2];
+                    const x1 = allPos[i1],   y1 = allPos[i1+1], z1 = allPos[i1+2];
+                    const x2 = allPos[i2],   y2 = allPos[i2+1], z2 = allPos[i2+2];
+                    const crX = y1*z2 - z1*y2, crY = z1*x2 - x1*z2, crZ = x1*y2 - y1*x2;
+                    const sv  = (x0*crX + y0*crY + z0*crZ) / 6;
+                    volSum += sv;
+                    sx += sv * (x0 + x1 + x2) / 4;
+                    sy += sv * (y0 + y1 + y2) / 4;
+                    sz += sv * (z0 + z1 + z2) / 4;
+                }
+                if (Math.abs(volSum) > 1e-15) {
+                    const w = bar.Formula_Weight;
+                    this._cogWeightSum += w;
+                    this._cogSumX += w * (sx / volSum);
+                    this._cogSumY += w * (sy / volSum);
+                    this._cogSumZ += w * (sz / volSum);
+                    this._cogBarsUsed++;
+                }
+            }
+
             const geo = new THREE.BufferGeometry();
             geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(allPos), 3));
             geo.setAttribute('normal',   new THREE.BufferAttribute(new Float32Array(allNrm), 3));
@@ -235,6 +267,15 @@ class Viewer3D {
         });
 
         this.ifcapi.CloseModel(modelID);
+
+        this._cogPos = (this._cogWeightSum > 0) ? {
+            ex: this._cogSumX / this._cogWeightSum,
+            ey: this._cogSumY / this._cogWeightSum,
+            ez: this._cogSumZ / this._cogWeightSum,
+            totalWeight: this._cogWeightSum,
+            barsUsed:    this._cogBarsUsed,
+        } : null;
+
         const tb = this.totalBrepBbox;
         const _h = (tb.minY === Infinity) ? '?' : Math.round((tb.maxY - tb.minY) * 1000);
         const _x = (tb.minX === Infinity) ? '?' : Math.round((tb.maxX - tb.minX) * 1000);
@@ -246,6 +287,7 @@ class Viewer3D {
         if (ph) ph.style.display = 'none';
 
         this._fitCamera();
+        this._addCOGMarker();
         return this._buildDimensions(cageAxisName);
     }
 
@@ -303,6 +345,22 @@ class Viewer3D {
             edbHeight = Math.round((mb.maxY - mb.minY) * 1000);
         }
 
+        const cog = this._cogPos ? {
+            ex: this._cogPos.ex,
+            ey: this._cogPos.ey,
+            ez: this._cogPos.ez,
+            totalWeight:   this._cogPos.totalWeight,
+            barsUsed:      this._cogPos.barsUsed,
+            // Height of COG above cage base (engine Y, converted to IFC mm)
+            heightFromBase: (t.minY !== Infinity)
+                ? Math.round((this._cogPos.ey - t.minY) * 1000)
+                : null,
+            // IFC mm coordinates for display/export
+            ifcX: Math.round( this._cogPos.ex * 1000),
+            ifcY: Math.round(-this._cogPos.ez * 1000),
+            ifcZ: Math.round( this._cogPos.ey * 1000),
+        } : null;
+
         return {
             edbWidth,                              // all bars — EDB cross-section width
             edbLength,                             // mesh only — EDB cage length
@@ -310,6 +368,7 @@ class Viewer3D {
             height:       Math.round((t.maxY - t.minY) * 1000), // all geometry — website display
             overallWidth:  Math.round(overallW),   // all geometry — website display
             overallLength: Math.round(overallL),   // all geometry — website display
+            cog,                                   // mass-weighted BREP centroid
         };
     }
 
@@ -459,11 +518,26 @@ class Viewer3D {
         this._datumMarker = sphere;
     }
 
+    _addCOGMarker() {
+        if (this._cogMarker) { this.scene.remove(this._cogMarker); this._cogMarker = null; }
+        if (!this._cogPos) return;
+        const { ex, ey, ez, totalWeight, barsUsed } = this._cogPos;
+        const size = this._sceneSize();
+        const geo  = new THREE.SphereGeometry(size * 0.006, 16, 16);
+        const mat  = new THREE.MeshBasicMaterial({ color: 0xFFD700, depthTest: false });
+        const sphere = new THREE.Mesh(geo, mat);
+        sphere.position.set(ex, ey, ez);
+        sphere.renderOrder = 998;
+        this.scene.add(sphere);
+        this._cogMarker = sphere;
+        console.log(`[Viewer3D] COG: IFC X=${Math.round(ex*1000)} Y=${Math.round(-ez*1000)} Z=${Math.round(ey*1000)} mm | weight=${totalWeight.toFixed(1)}kg | bars=${barsUsed}`);
+    }
+
     // Returns diagonal length of scene bounding box (excludes datum markers themselves)
     _sceneSize() {
         const box = new THREE.Box3();
         this.scene.traverse(o => {
-            if (o.isMesh && o !== this._datumMarker &&
+            if (o.isMesh && o !== this._datumMarker && o !== this._cogMarker &&
                     !(this._layerDatumMarkers || []).includes(o) &&
                     !(this._plateBoxes || []).includes(o))
                 box.expandByObject(o);
