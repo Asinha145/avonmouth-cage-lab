@@ -2924,28 +2924,26 @@ async function exportTemplateDXF(maxLength, maxWidth) {
 
                     const bestGap = usableGaps[0] ?? { centre: shortAxis / 2, clear: shortAxis - PAD * 2 };
 
-                    // Two constraints:
-                    //  fs_cc   — c/c gap height: text must fit between adjacent hole rows/cols
-                    //  fs_long — plate length:   text string width must fit the long axis
-                    // CHAR_W is used for BOTH sizing and centering so the two are consistent —
-                    // mixing different factors caused the centering to assume a smaller tw than
-                    // the DXF viewer renders, pushing the text outside the plate boundary.
-                    // 0.65 is conservative for Arial mixed-case (uppercase ~0.7x, digits ~0.6x).
-                    // FS_MIN applies but cannot override fs_long (would cause text to hang out).
-                    const CHAR_W  = 0.65;
-                    const fs_cc   = Math.min(bestGap.clear, FS_MAX);
-                    const fs_long = (longAxis - PAD * 2) / (txtChars * CHAR_W);
-                    const fs      = Math.min(Math.max(FS_MIN, Math.min(fs_cc, fs_long)), fs_long);
+                    // Text box sizing: fixed 1:15 aspect ratio (height:length = 20:300mm).
+                    //   Target: fs=20mm, tw=300mm.
+                    //   If plate long axis − LONG_MARGIN < 300mm, scale both proportionally:
+                    //     tw = longAxis − LONG_MARGIN,  fs = tw / TEXT_RATIO
+                    //   c/c gap still caps fs if the inter-hole gap is narrower than the
+                    //   computed height (prevents text overlapping holes).
+                    //   FS_MIN floor cannot exceed fs_plate (would push text outside plate).
+                    const LONG_MARGIN = 30;   // total margin on long axis (15mm each side)
+                    const TEXT_RATIO  = 15;   // tw = fs × 15  (300mm ÷ 20mm)
+                    const fs_plate = Math.min((longAxis - LONG_MARGIN) / TEXT_RATIO, FS_MAX);
+                    const fs       = Math.min(Math.max(FS_MIN, Math.min(fs_plate, bestGap.clear)), fs_plate);
+                    const tw       = fs * TEXT_RATIO;  // always 1:15
 
                     // Place analytically: centred on long axis, centred in best gap on short axis
                     if (rot === 0) {
                         // Horizontal: x centred on pLen, y = gap centre - fs/2
-                        const tw = txtChars * CHAR_W * fs;
                         TEXT(ox + (pLen - tw) / 2, oz + bestGap.centre - fs / 2, nameTxt, fs, 'TEXT', rot);
                     } else {
                         // 90°: txC at gap centre on pLen (x), ty centred on pWid (y)
                         // DXF 90° text: insertion=(tx,ty), x-extent=[tx-fs, tx], y-extent=[ty, ty+tw]
-                        const tw = txtChars * CHAR_W * fs;
                         TEXT(ox + bestGap.centre + fs / 2, oz + (pWid - tw) / 2, nameTxt, fs, 'TEXT', rot);
                     }
 
