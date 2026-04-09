@@ -2778,12 +2778,14 @@ async function exportTemplateDXF(maxLength, maxWidth) {
             const CIRCLE = (cx,cy,r,lyr) =>
                 emit('0','CIRCLE','8',lyr,
                      '10',cx.toFixed(1),'20',cy.toFixed(1),'30','0.0','40',r.toFixed(2));
-            // TEXT with optional rotation (deg) and style
-            const TEXT = (x,y,txt,h,lyr,rot=0) =>
+            // TEXT with optional rotation (deg), style, and X scale factor (wf).
+            // wf (group code 41) = width factor: forces rendered string to a target width.
+            // Use wf < 1 to compress (fit long strings), wf = 1 (default) for natural rendering.
+            const TEXT = (x,y,txt,h,lyr,rot=0,wf=1.0) =>
                 emit('0','TEXT','8',lyr,
                      '10',x.toFixed(1),'20',y.toFixed(1),'30','0.0',
-                     '40',h.toFixed(2),'1',String(txt),
-                     '50',rot.toFixed(1),'7','ARIAL');
+                     '40',h.toFixed(2),'41',wf.toFixed(4),
+                     '1',String(txt),'50',rot.toFixed(1),'7','ARIAL');
             // Dimension helpers
             const HDIM = (x0, x1, y, label) => {
                 LINE(x0, y, x1, y, 'DIMS');
@@ -2931,20 +2933,26 @@ async function exportTemplateDXF(maxLength, maxWidth) {
                     //   c/c gap still caps fs if the inter-hole gap is narrower than the
                     //   computed height (prevents text overlapping holes).
                     //   FS_MIN floor cannot exceed fs_plate (would push text outside plate).
-                    const LONG_MARGIN = 30;   // total margin on long axis (15mm each side)
-                    const TEXT_RATIO  = 15;   // tw = fs × 15  (300mm ÷ 20mm)
+                    const LONG_MARGIN    = 30;   // total margin on long axis (15mm each side)
+                    const TEXT_RATIO     = 15;   // tw = fs × 15  (300mm ÷ 20mm)
+                    // NATURAL_CHAR_W: empirical Arial mixed-case char aspect ratio.
+                    // Calibrated from AutoCAD: 26-char cage ref string renders at ~0.73× per char.
+                    // Width factor = TEXT_RATIO / (nChars × NATURAL_CHAR_W) forces rendered
+                    // string to exactly fill tw regardless of string length.
+                    const NATURAL_CHAR_W = 0.73;
                     const fs_plate = Math.min((longAxis - LONG_MARGIN) / TEXT_RATIO, FS_MAX);
                     const fs       = Math.min(Math.max(FS_MIN, Math.min(fs_plate, bestGap.clear)), fs_plate);
                     const tw       = fs * TEXT_RATIO;  // always 1:15
+                    const wf       = TEXT_RATIO / (txtChars * NATURAL_CHAR_W);
 
                     // Place analytically: centred on long axis, centred in best gap on short axis
                     if (rot === 0) {
                         // Horizontal: x centred on pLen, y = gap centre - fs/2
-                        TEXT(ox + (pLen - tw) / 2, oz + bestGap.centre - fs / 2, nameTxt, fs, 'TEXT', rot);
+                        TEXT(ox + (pLen - tw) / 2, oz + bestGap.centre - fs / 2, nameTxt, fs, 'TEXT', rot, wf);
                     } else {
                         // 90°: txC at gap centre on pLen (x), ty centred on pWid (y)
                         // DXF 90° text: insertion=(tx,ty), x-extent=[tx-fs, tx], y-extent=[ty, ty+tw]
-                        TEXT(ox + bestGap.centre + fs / 2, oz + (pWid - tw) / 2, nameTxt, fs, 'TEXT', rot);
+                        TEXT(ox + bestGap.centre + fs / 2, oz + (pWid - tw) / 2, nameTxt, fs, 'TEXT', rot, wf);
                     }
 
                     baseY += pWid + DRAW_PAD + PLATE_GAP;
