@@ -2922,19 +2922,29 @@ async function exportTemplateDXF(maxLength, maxWidth) {
                         .filter(g => g.clear >= FS_MIN)
                         .sort((a, b) => b.clear - a.clear);
 
-                    const bestGap    = usableGaps[0] ?? { centre: shortAxis / 2, clear: shortAxis - PAD * 2 };
-                    const fsFromLong = (longAxis - PAD * 2) / (txtChars * 0.6);
-                    const fs         = Math.max(FS_MIN, Math.min(fsFromLong, bestGap.clear, FS_MAX));
+                    const bestGap = usableGaps[0] ?? { centre: shortAxis / 2, clear: shortAxis - PAD * 2 };
+
+                    // Two constraints:
+                    //  fs_cc   — c/c gap height: text must fit between adjacent hole rows/cols
+                    //  fs_long — plate length:   text string width must fit the long axis
+                    //            Uses 0.65 char-aspect (conservative for Arial mixed-case) to
+                    //            leave rendering headroom; centering uses 0.6 (average).
+                    // FS_MIN applies but cannot override fs_long (would cause text to hang out).
+                    const CHAR_ASPECT = 0.6;   // used for tw → centering
+                    const CHAR_SIZE   = 0.65;  // used for sizing → prevents overflow
+                    const fs_cc   = Math.min(bestGap.clear, FS_MAX);
+                    const fs_long = (longAxis - PAD * 2) / (txtChars * CHAR_SIZE);
+                    const fs      = Math.min(Math.max(FS_MIN, Math.min(fs_cc, fs_long)), fs_long);
 
                     // Place analytically: centred on long axis, centred in best gap on short axis
                     if (rot === 0) {
                         // Horizontal: x centred on pLen, y = gap centre - fs/2
-                        const tw = txtChars * 0.6 * fs;
+                        const tw = txtChars * CHAR_ASPECT * fs;
                         TEXT(ox + (pLen - tw) / 2, oz + bestGap.centre - fs / 2, nameTxt, fs, 'TEXT', rot);
                     } else {
                         // 90°: txC at gap centre on pLen (x), ty centred on pWid (y)
                         // DXF 90° text: insertion=(tx,ty), x-extent=[tx-fs, tx], y-extent=[ty, ty+tw]
-                        const tw = txtChars * 0.6 * fs;
+                        const tw = txtChars * CHAR_ASPECT * fs;
                         TEXT(ox + bestGap.centre + fs / 2, oz + (pWid - tw) / 2, nameTxt, fs, 'TEXT', rot);
                     }
 
