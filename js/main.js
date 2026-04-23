@@ -343,12 +343,13 @@ function _setDatumConfirmed() {
 
 function _resetDatum() {
     _datumSet = false;
-    if (window._viewer3d) window._viewer3d.setLayerDatumMarkers([]);
     document.getElementById('datum-confirmed-notice').classList.add('hidden');
     document.getElementById('datum-pending-notice').classList.remove('hidden');
     document.getElementById('datum-reset-btn').classList.add('hidden');
     document.getElementById('datum-set-btn').textContent = 'Set Datum';
     _setExportsEnabled(false);
+    // Re-show datum markers at initial position
+    if (window._refreshDatumMarkers) window._refreshDatumMarkers();
 }
 
 function _setExportsEnabled(enabled) {
