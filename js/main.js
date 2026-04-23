@@ -2900,6 +2900,9 @@ async function exportCOGDXF() {
     btn.textContent = '⏳ COG DXF...'; btn.disabled = true;
 
     try {
+        const viewer = window._viewer3d;
+        if (!viewer || !viewer.brepLoaded) throw new Error('3D geometry not loaded — wait for 3D view to finish.');
+
         const prodNum    = _productionNumber || '';
         const cageRef    = _cageReference || 'cage';
         const sepAxis    = _detectFaceSepAxis();
@@ -2991,25 +2994,48 @@ async function exportCOGDXF() {
         // ── Entities ───────────────────────────────────────────────────────────
         emit('0','SECTION','2','ENTITIES');
 
-        // Bar outlines (polylines from each bar's start/end)
-        for (const bar of faceBars) {
-            if (!bar.Start_X || !bar.End_X) continue;
+        // BREP bar hull outlines (same as site template DXF)
+        const engineToFace2D = ([ex, ey, ez]) => {
+            const ix = ex * 1000, iy = -ez * 1000, iz = ey * 1000;
+            if (sepAxis === 'x') return [iy, iz];
+            if (sepAxis === 'y') return [ix, iz];
+            return [ix, iy];  // slab
+        };
 
-            let barX0, barX1;
-            if (sepAxis === 'x') {
-                barX0 = bar.Start_Y - datumPx;
-                barX1 = bar.End_Y - datumPx;
-            } else if (sepAxis === 'y') {
-                barX0 = bar.Start_X - datumPx;
-                barX1 = bar.End_X - datumPx;
-            } else {
-                barX0 = bar.Start_X - datumPx;
-                barX1 = bar.End_X - datumPx;
+        function convexHull2D(pts) {
+            if (pts.length <= 2) return pts;
+            let s = 0;
+            for (let i = 1; i < pts.length; i++) if (pts[i][0] < pts[s][0]) s = i;
+            const lower = [];
+            for (let i = s; i < pts.length; i++) {
+                while (lower.length >= 2) {
+                    const o = lower[lower.length-2], a = lower[lower.length-1], b = pts[i];
+                    if ((a[0]-o[0])*(b[1]-o[1]) - (a[1]-o[1])*(b[0]-o[0]) <= 0) lower.pop();
+                    else break;
+                }
+                lower.push(pts[i]);
             }
-            const barZ0 = bar.Start_Z - datumPz;
-            const barZ1 = bar.End_Z - datumPz;
+            for (let i = s-1; i >= 0; i--) {
+                while (lower.length >= 2) {
+                    const o = lower[lower.length-2], a = lower[lower.length-1], b = pts[i];
+                    if ((a[0]-o[0])*(b[1]-o[1]) - (a[1]-o[1])*(b[0]-o[0]) <= 0) lower.pop();
+                    else break;
+                }
+                lower.push(pts[i]);
+            }
+            return lower.slice(0, -1);
+        }
 
-            LINE(barX0, barZ0, barX1, barZ1, 'OUTLINE');
+        // Get BREP vertex clouds from viewer
+        const clouds = viewer.getFaceLayerVertexClouds(faceLayer);
+        for (const cloud of clouds) {
+            const pts2d = cloud.map(engineToFace2D);
+            const hull  = convexHull2D(pts2d);
+            if (hull.length < 2) continue;
+            for (let i = 0; i < hull.length; i++) {
+                const a = hull[i], b = hull[(i+1) % hull.length];
+                LINE(a[0]-datumPx, a[1]-datumPz, b[0]-datumPx, b[1]-datumPz, 'OUTLINE');
+            }
         }
 
         // COG marker: circle + crosshair
