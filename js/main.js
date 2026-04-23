@@ -132,6 +132,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('export-combined-dxf-btn').addEventListener('click', () => {
         exportCombinedFaceDXF().catch(e => console.error('[combinedDXF]', e));
     });
+    document.getElementById('export-cog-dxf-btn').addEventListener('click', () => {
+        exportCOGDXF().catch(e => console.error('[cogDXF]', e));
+    });
     document.getElementById('edb-wall-thickness').addEventListener('input', updateEDBComputedInfo);
 
     document.getElementById('page-prev').addEventListener('click', () => {
@@ -356,7 +359,7 @@ function _setExportsEnabled(enabled) {
     const ids = [
         'export-excel-btn', 'export-ubars-btn', 'export-struts-btn',
         'export-slab-btn', 'export-report-btn', 'export-template-dxf-btn',
-        'export-combined-dxf-btn', 'export-face-dxf-btn'
+        'export-combined-dxf-btn', 'export-face-dxf-btn', 'export-cog-dxf-btn'
     ];
     ids.forEach(id => {
         const btn = document.getElementById(id);
@@ -2576,7 +2579,7 @@ async function exportCombinedFaceDXF() {
              '0','LTYPE','2','CONTINUOUS','70','0','3','Solid line','72','65','73','0','40','0.0',
              '0','ENDTAB',
              '0','TABLE','2','LAYER','70','6',
-             '0','LAYER','2','BARS',         '70','0','62','3','6','CONTINUOUS',
+             '0','LAYER','2','BARS',         '70','0','62','7','6','CONTINUOUS',
              '0','LAYER','2','HOLES',        '70','0','62','1','6','CONTINUOUS',
              '0','LAYER','2','PLATE_OUTLINE','70','0','62','5','6','CONTINUOUS',
              '0','LAYER','2','DIMS',         '70','0','62','8','6','CONTINUOUS',
@@ -2623,8 +2626,6 @@ async function exportCombinedFaceDXF() {
             // All holes (VS + HS + LB) drawn at their face coordinates
             for (const h of plotHoles) {
                 CIRCLE(h.px, baseZ + h.pz, h.holeDia / 2, 'HOLES');
-                TEXT(h.px + h.holeDia/2 + 3, baseZ + h.pz - 3,
-                    `${cageRef}-CPLR-${String(h.num).padStart(3,'0')}`, 5, 'TEXT');
             }
 
             // ── Plate outlines — VS, HS, LB all at their face coordinates ────
@@ -2635,9 +2636,63 @@ async function exportCombinedFaceDXF() {
                 LINE(plate.maxX, baseZ+plate.minZ, plate.maxX, baseZ+plate.maxZ, 'PLATE_OUTLINE');
                 LINE(plate.maxX, baseZ+plate.maxZ, plate.minX, baseZ+plate.maxZ, 'PLATE_OUTLINE');
                 LINE(plate.minX, baseZ+plate.maxZ, plate.minX, baseZ+plate.minZ, 'PLATE_OUTLINE');
-                TEXT(plate.minX, baseZ+plate.maxZ+6,
-                    `${pType}  ${Math.round(plate.length)}×${Math.round(plate.width)} mm  (${plate.holes.length} holes)`,
-                    9, 'TEXT');
+                const pNameTxt = [prodNum, cageRef, `${faceName}-${pType}`, String(plate.id).padStart(3,'0')]
+                    .filter(Boolean).join(' - ');
+                TEXT(plate.minX, baseZ+plate.maxZ+6, pNameTxt, 9, 'TEXT');
+            }
+
+            // ── Chain dimensions from datum rebar fixed end ────────────────────
+            const datumSide   = document.getElementById('datum-side-select').value;
+            const heightSide  = (document.getElementById('slab-face-select').value) || 'bottom';
+            const sepAxis     = _detectFaceSepAxis();
+            const datumEnds   = _getDatumBarEnds(faceName, datumSide, heightSide, sepAxis,
+                                                 useLongY, useY, datumPx, datumPz);
+            if (datumEnds && plotHoles.length > 0) {
+                // Group holes by rebar layer (VS1, VS2, HS1, etc.)
+                const holesByLayer = {};
+                for (const h of plotHoles) {
+                    const lyr = h.layer || 'UNKNOWN';
+                    if (!holesByLayer[lyr]) holesByLayer[lyr] = [];
+                    holesByLayer[lyr].push(h);
+                }
+
+                // Emit chain dimensions per layer
+                let dimOffsetX = 0;
+                for (const lyr of Object.keys(holesByLayer).sort()) {
+                    const holes = holesByLayer[lyr];
+                    const isVS = /^VS/i.test(lyr);
+                    if (isVS) {
+                        // Vertical chain: sort by pz, dimension axis is vertical
+                        holes.sort((a, b) => a.pz - b.pz);
+                        // First dimension: datum end to first hole
+                        if (holes.length > 0) {
+                            const firstZ = holes[0].pz;
+                            const dimZ = baseZ + (firstZ + datumEnds.vBarEndPz) / 2;
+                            VDIM(datumEnds.hBarEndPx - 100 - dimOffsetX, baseZ + datumEnds.vBarEndPz, baseZ + firstZ,
+                                 Math.round(Math.abs(firstZ - datumEnds.vBarEndPz)));
+                            // Incremental dimensions between holes
+                            for (let i = 0; i < holes.length - 1; i++) {
+                                const z0 = holes[i].pz, z1 = holes[i+1].pz;
+                                VDIM(holes[i].px - 30 - dimOffsetX, baseZ + z0, baseZ + z1, Math.round(z1 - z0));
+                            }
+                        }
+                    } else if (/^HS/i.test(lyr)) {
+                        // Horizontal chain: sort by px, dimension axis is horizontal
+                        holes.sort((a, b) => a.px - b.px);
+                        // First dimension: datum end to first hole
+                        if (holes.length > 0) {
+                            const firstX = holes[0].px;
+                            HDIM(datumEnds.hBarEndPx, firstX, baseZ + datumEnds.vBarEndPz + 50 + dimOffsetX,
+                                 Math.round(Math.abs(firstX - datumEnds.hBarEndPx)));
+                            // Incremental dimensions between holes
+                            for (let i = 0; i < holes.length - 1; i++) {
+                                const x0 = holes[i].px, x1 = holes[i+1].px;
+                                HDIM(x0, x1, baseZ + holes[i].pz + 30 + dimOffsetX, Math.round(x1 - x0));
+                            }
+                        }
+                    }
+                    dimOffsetX += 20;  // Offset each layer's dims by 20mm to avoid overlap
+                }
             }
 
             // ── Dimension ticks ───────────────────────────────────────────────
@@ -2830,6 +2885,184 @@ async function exportCombinedFaceDXF() {
         btn.textContent = orig; btn.disabled = false;
     }
 }
+
+// ════════════════════════════════════════════════════════════════════════════════
+// COG DXF Export — Center of Gravity with bar outlines and dimensions
+// ════════════════════════════════════════════════════════════════════════════════
+
+async function exportCOGDXF() {
+    if (!_datumSet) { alert('Set datum before exporting.'); return; }
+    if (!_wasm3DDims?.cog) { alert('COG data not available — ensure 3D viewer has loaded.'); return; }
+
+    const btn = document.getElementById('export-cog-dxf-btn');
+    const orig = btn.textContent;
+    btn.textContent = '⏳ COG DXF...'; btn.disabled = true;
+
+    try {
+        const prodNum    = _productionNumber || '';
+        const cageRef    = _cageReference || 'cage';
+        const sepAxis    = _detectFaceSepAxis();
+        const datumSide  = document.getElementById('datum-side-select').value;
+        const heightSide = document.getElementById('slab-face-select').value || 'bottom';
+        const { datumPx, datumPz } = _cageDatum();
+        const cog = _wasm3DDims.cog;
+
+        // Determine external face layer
+        let faceLayer;
+        if (sepAxis === 'z') {
+            // Slab: T1A if top, B1A if bottom
+            faceLayer = heightSide === 'top' ? 'T1A' : 'B1A';
+        } else {
+            // Wall: use N1A (far side from datum), or F1A if datum is on the N side
+            // For simplicity, default to N1A (opposite side from datum origin)
+            faceLayer = 'N1A';
+        }
+
+        const faceBars = allData.filter(b => b.Avonmouth_Layer_Set === faceLayer);
+        const datumEnds = _getDatumBarEnds(faceLayer, datumSide, heightSide, sepAxis,
+                                           false, false, datumPx, datumPz);
+
+        // COG projection to plot space (same as exportCombinedFaceDXF)
+        let cogPx, cogPz;
+        if (sepAxis === 'x') {
+            cogPx = cog.ifcY - datumPx;
+        } else if (sepAxis === 'y') {
+            cogPx = cog.ifcX - datumPx;
+        } else {
+            // Slab: use IFC-X as horizontal (arbitrary choice)
+            cogPx = cog.ifcX - datumPx;
+        }
+        cogPz = cog.ifcZ - datumPz;
+
+        // DXF generation
+        const lines = [];
+        const emit = (...args) => {
+            for (let i = 0; i < args.length; i += 2) {
+                lines.push(`${args[i]}\r\n${args[i + 1]}\r\n`);
+            }
+        };
+
+        const LINE = (x0, z0, x1, z1, layer) => {
+            emit('0','LINE','8',layer,'10',x0,'20',z0,'30','0','11',x1,'21',z1,'31','0');
+        };
+        const CIRCLE = (x, z, r, layer) => {
+            emit('0','CIRCLE','8',layer,'10',x,'20',z,'30','0','40',r);
+        };
+        const TEXT = (x, z, str, h, layer) => {
+            emit('0','TEXT','8',layer,'10',x,'20',z,'30','0','40',h,'1',str,'7','STANDARD');
+        };
+        const HDIM = (x0, x1, z, label) => {
+            LINE(x0, z, x1, z, 'DIMS');
+            LINE(x0, z-5, x0, z+5, 'DIMS');
+            LINE(x1, z-5, x1, z+5, 'DIMS');
+            TEXT((x0+x1)/2 - String(label).length*3, z+8, String(label), 8, 'DIMS');
+        };
+        const VDIM = (x, z0, z1, label) => {
+            LINE(x, z0, x, z1, 'DIMS');
+            LINE(x-5, z0, x+5, z0, 'DIMS');
+            LINE(x-5, z1, x+5, z1, 'DIMS');
+            TEXT(x+8, (z0+z1)/2-4, String(label), 8, 'DIMS');
+        };
+
+        // ── DXF Header ────────────────────────────────────────────────────────
+        emit('0','SECTION','2','HEADER',
+             '9','$ACADVER','1','AC1015',
+             '9','$EXTMIN','10','0','20','0','30','0',
+             '9','$EXTMAX','10','5000','20','5000','30','0',
+             '0','ENDSEC');
+
+        // ── Tables (Layers) ────────────────────────────────────────────────────
+        emit('0','SECTION','2','TABLES',
+             '0','TABLE','2','LAYER','70','5',
+             '0','LAYER','2','OUTLINE',    '70','0','62','3','6','CONTINUOUS',
+             '0','LAYER','2','COG',        '70','0','62','1','6','CONTINUOUS',
+             '0','LAYER','2','DIMS',       '70','0','62','7','6','CONTINUOUS',
+             '0','LAYER','2','TEXT',       '70','0','62','7','6','CONTINUOUS',
+             '0','ENDTAB',
+             '0','ENDTAB',
+             '0','ENDSEC');
+
+        // ── Blocks ─────────────────────────────────────────────────────────────
+        emit('0','SECTION','2','BLOCKS',
+             '0','ENDTAB',
+             '0','ENDSEC');
+
+        // ── Entities ───────────────────────────────────────────────────────────
+        emit('0','SECTION','2','ENTITIES');
+
+        // Bar outlines (polylines from each bar's start/end)
+        for (const bar of faceBars) {
+            if (!bar.Start_X || !bar.End_X) continue;
+
+            let barX0, barX1;
+            if (sepAxis === 'x') {
+                barX0 = bar.Start_Y - datumPx;
+                barX1 = bar.End_Y - datumPx;
+            } else if (sepAxis === 'y') {
+                barX0 = bar.Start_X - datumPx;
+                barX1 = bar.End_X - datumPx;
+            } else {
+                barX0 = bar.Start_X - datumPx;
+                barX1 = bar.End_X - datumPx;
+            }
+            const barZ0 = bar.Start_Z - datumPz;
+            const barZ1 = bar.End_Z - datumPz;
+
+            LINE(barX0, barZ0, barX1, barZ1, 'OUTLINE');
+        }
+
+        // COG marker: circle + crosshair
+        const cogR = 15;
+        CIRCLE(cogPx, cogPz, cogR, 'COG');
+        LINE(cogPx - 25, cogPz, cogPx + 25, cogPz, 'COG');
+        LINE(cogPx, cogPz - 25, cogPx, cogPz + 25, 'COG');
+
+        // COG stats label
+        const cogLabel = `COG: ${cog.totalWeight.toFixed(1)} kg (${cog.barsUsed} bars)`;
+        TEXT(cogPx + 30, cogPz + 30, cogLabel, 10, 'TEXT');
+
+        // Dimensions from datum bar end to COG
+        if (datumEnds) {
+            // Horizontal dimension
+            HDIM(datumEnds.hBarEndPx, cogPx, cogPz + 80,
+                 Math.round(cogPx - datumEnds.hBarEndPx));
+            // Vertical dimension
+            VDIM(datumEnds.hBarEndPx - 100, datumEnds.vBarEndPz, cogPz,
+                 Math.round(cogPz - datumEnds.vBarEndPz));
+        }
+
+        // Drawing title
+        TEXT(0, -100, `${cageRef} — Center of Gravity (COG) Drawing`, 20, 'TEXT');
+        TEXT(0, -130, `Datum: ${datumSide} side, ${heightSide} (IFC mm)`, 8, 'TEXT');
+
+        emit('0','ENDSEC');
+
+        // ── EOF ────────────────────────────────────────────────────────────────
+        emit('0','EOF');
+
+        // Download
+        const dxfContent = lines.join('');
+        const filename = [prodNum, cageRef, 'COG'].filter(Boolean).join('-') + '.dxf';
+        const blob = new Blob([dxfContent], { type: 'text/plain' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+
+    } catch (e) {
+        console.error('COG DXF error:', e);
+        alert(`COG DXF failed: ${e.message}`);
+    } finally {
+        btn.textContent = orig;
+        btn.disabled = false;
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════════════════
 
 // Pure-JS minimal ZIP builder (stored, no compression).
 // files = [{ name: string, content: string }]
@@ -3056,6 +3289,10 @@ async function exportTemplateDXF(maxLength, maxWidth) {
                     CIRCLE(ox+pLen-5, oz+5,      sr, 'SCREW_HOLES');
                     CIRCLE(ox+5,      oz+pWid-5, sr, 'SCREW_HOLES');
                     CIRCLE(ox+pLen-5, oz+pWid-5, sr, 'SCREW_HOLES');
+                    // Center mounting hole for plates > 500mm in either dimension
+                    if (pLen > 500 || pWid > 500) {
+                        CIRCLE(ox + pLen / 2, oz + pWid / 2, sr, 'SCREW_HOLES');
+                    }
 
                     // ── Overall dimensions (plate width + height only) ─────────
                     HDIM(ox, ox+pLen, oz-20, `${Math.round(pLen)} mm`);
