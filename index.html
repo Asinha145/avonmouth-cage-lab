@@ -31,7 +31,20 @@
         <a href="dxf-test.html" style="margin-left:auto;font-size:.78rem;color:#7eb8f7;text-decoration:none;white-space:nowrap;padding:4px 10px;border:1px solid #2d6a9f;border-radius:5px;" title="Open DXF test viewer">📐 DXF Viewer</a>
     </header>
 
-    <main>
+    <!-- ══ PASSCODE SECTION ══════════════════════════════════════════════ -->
+    <section id="passcode-section" class="passcode-section">
+        <div class="passcode-card">
+            <div class="passcode-icon">🔒</div>
+            <h2>Avonmouth Cage Tool</h2>
+            <p class="passcode-hint">Enter access code to continue</p>
+            <input type="password" id="passcode-input" placeholder="Access code"
+                   autocomplete="off" class="passcode-input">
+            <button id="passcode-btn" class="btn-primary">Unlock →</button>
+            <p id="passcode-error" class="passcode-error hidden">Incorrect code. Try again.</p>
+        </div>
+    </section>
+
+    <main class="main-hidden">
         <!-- ══ UPLOAD + 3D VIEWER ══════════════════════════════════════════ -->
         <section class="upload-section">
             <h2>Upload IFC File</h2>
@@ -52,15 +65,18 @@
                     </div>
                     <div class="cage-ref-fields">
                         <div class="cage-ref-row">
-                            <label for="production-number">Production No.</label>
-                            <input type="text" id="production-number" placeholder="e.g. P7349">
+                            <label for="production-number">Production No. <span class="required-star">*</span></label>
+                            <input type="text" id="production-number" placeholder="e.g. P7349" required>
+                            <span class="field-hint">Required before analysis</span>
                         </div>
                         <div class="cage-ref-row">
                             <label for="cage-reference">Cage Reference</label>
-                            <input type="text" id="cage-reference" placeholder="e.g. C1">
+                            <input type="text" id="cage-reference" placeholder="Auto-extracted from IFC"
+                                   class="cage-ref-auto" readonly>
+                            <span class="cage-ref-status" id="cage-ref-status"></span>
                         </div>
                     </div>
-                    <button id="process-btn" class="btn-primary" disabled>Analyse Cage</button>
+                    <button id="process-btn" class="btn-primary" disabled>Cage Viewer</button>
                     <div id="progress-container" class="hidden">
                         <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
                         <p id="progress-text">Processing…</p>
@@ -181,24 +197,32 @@
                 <span class="cage-axis-note">Orientation determined purely from bar geometry</span>
             </div>
 
-            <!-- Datum side control (shown after analysis) -->
-            <div class="datum-side-control hidden" id="datum-side-control">
-                <span class="datum-side-label">Datum Side</span>
-                <select id="datum-side-select">
-                    <option value="left">Left</option>
-                    <option value="right">Right</option>
-                </select>
-                <span class="datum-side-hint">Layer datum markers move to the selected end · Main datum stays fixed</span>
-            </div>
-
-            <!-- Slab face control (shown only for slab/roof cages) -->
-            <div class="datum-side-control hidden" id="slab-face-control">
-                <span class="datum-side-label">Datum Height</span>
-                <select id="slab-face-select">
-                    <option value="bottom">Bottom</option>
-                    <option value="top">Top</option>
-                </select>
-                <span class="datum-side-hint">Bottom = nearest H-bar crossing · Top = farthest H-bar crossing</span>
+            <!-- Datum block (shown after BREP loads) -->
+            <div id="datum-block" class="datum-block hidden">
+                <div class="datum-block-inner">
+                    <div class="datum-side-control" id="datum-side-control">
+                        <span class="datum-side-label">Datum Side</span>
+                        <select id="datum-side-select">
+                            <option value="left">Left</option>
+                            <option value="right">Right</option>
+                        </select>
+                    </div>
+                    <div class="datum-side-control hidden" id="slab-face-control">
+                        <span class="datum-side-label">Datum Height</span>
+                        <select id="slab-face-select">
+                            <option value="bottom">Bottom</option>
+                            <option value="top">Top</option>
+                        </select>
+                    </div>
+                    <button id="datum-set-btn" class="btn-datum-set">Set Datum</button>
+                    <button id="datum-reset-btn" class="btn-datum-reset hidden">Reset Datum</button>
+                </div>
+                <div id="datum-pending-notice" class="datum-pending-notice">
+                    🔒 Set datum to unlock exports
+                </div>
+                <div id="datum-confirmed-notice" class="datum-confirmed-notice hidden">
+                    ✓ Datum set · Exports unlocked
+                </div>
             </div>
 
             <!-- Top stat cards -->
@@ -394,7 +418,7 @@
             <div class="export-section">
                 <h3>Export Results</h3>
                 <p class="export-note">Includes layer, coordinates, cage axis, stagger cluster IDs</p>
-                <button id="export-excel-btn" class="btn-secondary">📊 Bar Schedule Excel</button>
+                <button id="export-excel-btn" class="btn-secondary" disabled>📊 Bar Schedule Excel</button>
 
                 <!-- EDB Design Sheet Downloads -->
                 <div class="edb-section">
@@ -417,8 +441,8 @@
                         <button id="export-struts-btn" class="btn-secondary btn-edb" disabled>📥 Download Struts EDB</button>
                     </div>
 
-                    <button id="export-report-btn" class="btn-secondary btn-edb hidden">📋 Export C01 Report</button>
-                    <button id="export-template-dxf-btn" class="btn-secondary btn-edb hidden">📐 Download Template DXF</button>
+                    <button id="export-report-btn" class="btn-secondary btn-edb hidden" disabled>📋 Export C01 Report</button>
+                    <button id="export-template-dxf-btn" class="btn-secondary btn-edb hidden" disabled>📐 Download Template DXF</button>
                 </div>
 
                 <!-- Face View DXF -->
@@ -432,7 +456,7 @@
                             <select id="face-view-select"></select>
                         </label>
                     </div>
-                    <button id="export-face-dxf-btn" class="btn-secondary btn-edb">📐 Face View DXF</button>
+                    <button id="export-face-dxf-btn" class="btn-secondary btn-edb" disabled>📐 Face View DXF</button>
                 </div>
             </div>
         </section>

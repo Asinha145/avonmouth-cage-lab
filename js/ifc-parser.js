@@ -70,6 +70,7 @@ class IFCParser {
         // Set after parseFile():
         this.cageAxis        = [0, 0, 1];
         this.cageAxisName    = 'Z';
+        this.cageReference   = null;   // set by extractCageReference()
         this.unknownCount    = 0;
         this.duplicateCount  = 0;
         this.isRejected      = false;
@@ -97,6 +98,7 @@ class IFCParser {
         this.detectBarShapes(bars);
         this.computeRejectionStatus(bars);
         this.couplerMap = this.extractCouplerHeads(lines);
+        this.extractCageReference();
 
         console.log(`Cage axis: ${this.cageAxisName} | Rejected: ${this.isRejected} (unknown=${this.unknownCount}, dups=${this.duplicateCount})`);
         console.log(`Done – ${bars.length} bars, ${this.couplerMap.size} coupler heads`);
@@ -943,6 +945,39 @@ class IFCParser {
                           this.missingLayerCount  > 0 ||
                           this.duplicateCount     > 0 ||
                           this.missingWeightCount > 0;
+    }
+
+    // ── Cage Reference Extraction ─────────────────────────────────────────
+    // Scans ALL Avonmouth psets for either:
+    //   (a) direct 'Cage_Reference' key, or
+    //   (b) four-component pattern: Building + Pour + Site + Cage concatenated
+    // Sets this.cageReference (null if not found).
+    extractCageReference() {
+        for (const [, pi] of this.psetToProps) {
+            if (pi.name !== 'Avonmouth') continue;
+            let building = null, pour = null, site = null, cage = null;
+            for (const propId of pi.props) {
+                const p = this.propertiesDict.get(propId);
+                if (!p) continue;
+                const nl = p.name.toLowerCase().trim();
+                if (nl === 'cage_reference' || nl === 'cagereference') {
+                    this.cageReference = p.value;
+                    return p.value;
+                }
+                if (nl === 'building')                                         building = p.value;
+                else if (nl === 'pour')                                        pour     = p.value;
+                else if (nl === 'site' || nl === 'avon/site' ||
+                         nl === 'avon_site' || nl === 'avon')                  site     = p.value;
+                else if (nl === 'cage')                                        cage     = p.value;
+            }
+            const combined = [building, pour, site, cage].filter(Boolean).join('');
+            if (combined.length >= 3) {
+                this.cageReference = combined;
+                return combined;
+            }
+        }
+        this.cageReference = null;
+        return null;
     }
 }
 

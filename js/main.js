@@ -30,14 +30,47 @@ let _parserRejected = false;
 let _isSlabCage  = false;
 let _rawIfcText  = null;   // raw IFC text retained for template DXF generation
 
+// ── Three-stage UI state ───────────────────────────────────────────────
+let _productionNumber = '';
+let _cageReference    = '';
+let _datumSet         = false;
+let _brepReady        = false;
+
 // ── Initialise viewer on page load ─────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
+
+    // ── Passcode gate ──────────────────────────────────────────────────
+    const PASSCODE = 'avon2026';   // change before deploy
+
+    function _unlockTool() {
+        document.getElementById('passcode-section').classList.add('hidden');
+        document.querySelector('main').classList.remove('main-hidden');
+        sessionStorage.setItem('cage-tool-unlocked', '1');
+    }
+    if (sessionStorage.getItem('cage-tool-unlocked') === '1') _unlockTool();
+
+    document.getElementById('passcode-btn').addEventListener('click', () => {
+        const val = document.getElementById('passcode-input').value;
+        if (val === PASSCODE) {
+            document.getElementById('passcode-error').classList.add('hidden');
+            _unlockTool();
+        } else {
+            document.getElementById('passcode-error').classList.remove('hidden');
+            document.getElementById('passcode-input').value = '';
+            document.getElementById('passcode-input').focus();
+        }
+    });
+    document.getElementById('passcode-input').addEventListener('keydown', e => {
+        if (e.key === 'Enter') document.getElementById('passcode-btn').click();
+    });
+
     // File picker
     document.getElementById('ifc-file').addEventListener('change', e => {
         const f = e.target.files[0];
         document.getElementById('ifc-filename').textContent = f ? f.name : 'No file selected';
-        document.getElementById('process-btn').disabled = !f;
+        _checkEnableCageViewer();
     });
+    document.getElementById('production-number').addEventListener('input', _checkEnableCageViewer);
     document.getElementById('process-btn').addEventListener('click', processFile);
 
     // Drag-and-drop
@@ -62,7 +95,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             } catch (_) { /* Safari */ }
             window._droppedFile = f;
             document.getElementById('ifc-filename').textContent = f.name;
-            document.getElementById('process-btn').disabled = false;
+            _checkEnableCageViewer();
         });
     }
 
@@ -74,8 +107,18 @@ document.addEventListener('DOMContentLoaded', async () => {
         const heightSide = document.getElementById('slab-face-select')?.value || 'bottom';
         window._viewer3d.setLayerDatumMarkers(_computeLayerDatums(datumSide, heightSide));
     };
-    document.getElementById('datum-side-select').addEventListener('change', _refreshDatumMarkers);
-    document.getElementById('slab-face-select').addEventListener('change', _refreshDatumMarkers);
+    window._refreshDatumMarkers = _refreshDatumMarkers;
+
+    const _datumDropdownChange = () => {
+        _refreshDatumMarkers();
+        // If datum was already set, revert to pending until user re-confirms
+        if (_datumSet) _resetDatum();
+    };
+    document.getElementById('datum-side-select').addEventListener('change', _datumDropdownChange);
+    document.getElementById('slab-face-select').addEventListener('change', _datumDropdownChange);
+
+    document.getElementById('datum-set-btn').addEventListener('click', _setDatumConfirmed);
+    document.getElementById('datum-reset-btn').addEventListener('click', _resetDatum);
     document.getElementById('export-excel-btn').addEventListener('click', () => exportXLSX());
     document.getElementById('export-ubars-btn').addEventListener('click',  () => exportEDB('ubars'));
     document.getElementById('export-struts-btn').addEventListener('click', () => exportEDB('struts'));
@@ -164,10 +207,27 @@ function _resetClashStep() {
 
 // ── Process file ────────────────────────────────────────────────────────
 
+function _checkEnableCageViewer() {
+    const file   = document.getElementById('ifc-file').files[0] || window._droppedFile;
+    const prodNo = document.getElementById('production-number').value.trim();
+    document.getElementById('process-btn').disabled = !(file && prodNo.length > 0);
+}
+
 async function processFile() {
     const file = document.getElementById('ifc-file').files[0] || window._droppedFile || null;
     window._droppedFile = null;
     if (!file) { alert('Please select an IFC file.'); return; }
+
+    // Reset three-stage UI state for new file
+    _datumSet = false;
+    _brepReady = false;
+    document.getElementById('datum-block').classList.add('hidden');
+    document.getElementById('datum-confirmed-notice').classList.add('hidden');
+    document.getElementById('datum-pending-notice').classList.remove('hidden');
+    document.getElementById('datum-reset-btn').classList.add('hidden');
+    document.getElementById('datum-set-btn').textContent = 'Set Datum';
+    _setExportsEnabled(false);
+
     showProgress(); allData = []; _wasm3DDims = null;
     _resetClashStep();
 
@@ -187,6 +247,25 @@ async function processFile() {
         if (!allData.length) throw new Error('No bars extracted.');
         cageAxis     = parser.cageAxis;
         cageAxisName = parser.cageAxisName;
+
+        // Store production number
+        _productionNumber = document.getElementById('production-number').value.trim();
+
+        // Populate cage reference from IFC or fallback to manual entry
+        const cageRefInput  = document.getElementById('cage-reference');
+        const cageRefStatus = document.getElementById('cage-ref-status');
+        if (parser.cageReference) {
+            cageRefInput.value    = parser.cageReference;
+            cageRefInput.readOnly = true;
+            cageRefStatus.textContent = '✓ from IFC';
+            cageRefStatus.className   = 'cage-ref-status cage-ref-ok';
+        } else {
+            cageRefInput.value    = '';
+            cageRefInput.readOnly = false;
+            cageRefStatus.textContent = '⚠ not in IFC — enter manually';
+            cageRefStatus.className   = 'cage-ref-status cage-ref-warn';
+        }
+        _cageReference = cageRefInput.value;
 
         updateProgress(70, 'Building results…');
         displayResults(parser);
@@ -210,14 +289,13 @@ async function processFile() {
                     const heightSide = document.getElementById('slab-face-select')?.value || 'bottom';
                     window._viewer3d.setLayerDatumMarkers(_computeLayerDatums(datumSide, heightSide));
                     window._viewer3d.setPlateBoxes(_computePlate3DBoxes());
-                    // Enable face view DXF buttons now that BREP geometry is loaded
-                    const faceBtn = document.getElementById('export-face-dxf-btn');
-                    if (faceBtn) { faceBtn.disabled = false; faceBtn.title = ''; }
-                    const combinedBtn = document.getElementById('export-combined-dxf-btn');
-                    if (combinedBtn) { combinedBtn.disabled = false; combinedBtn.title = ''; }
                 } catch (e) {
                     console.warn('[main] BREP load error:', e);
+                } finally {
+                    _showDatumBlock();
                 }
+            } else {
+                _showDatumBlock();
             }
         }, 100);
 
@@ -225,6 +303,102 @@ async function processFile() {
         console.error(err);
         alert(`Error: ${err.message}`);
         hideProgress();
+    }
+}
+
+// ── Datum state management ─────────────────────────────────────────────
+
+function _showDatumBlock() {
+    _brepReady = true;
+    const block = document.getElementById('datum-block');
+    if (block) block.classList.remove('hidden');
+    // Auto-detect datum side from geometry
+    const datumSideSelect = document.getElementById('datum-side-select');
+    if (datumSideSelect) datumSideSelect.value = _detectDatumSide() || 'left';
+    // Show slab height control if slab cage
+    const slabFaceCtrl = document.getElementById('slab-face-control');
+    if (slabFaceCtrl) {
+        if (_detectFaceSepAxis() === 'z') {
+            slabFaceCtrl.classList.remove('hidden');
+        } else {
+            slabFaceCtrl.classList.add('hidden');
+        }
+    }
+    // Preview datum markers (not confirmed yet)
+    if (window._refreshDatumMarkers) window._refreshDatumMarkers();
+}
+
+function _setDatumConfirmed() {
+    _datumSet = true;
+    // Capture any manual cage ref edits before locking exports
+    const cageRefInput = document.getElementById('cage-reference');
+    if (cageRefInput && cageRefInput.value.trim()) _cageReference = cageRefInput.value.trim();
+    if (window._refreshDatumMarkers) window._refreshDatumMarkers();
+    document.getElementById('datum-pending-notice').classList.add('hidden');
+    document.getElementById('datum-confirmed-notice').classList.remove('hidden');
+    document.getElementById('datum-reset-btn').classList.remove('hidden');
+    document.getElementById('datum-set-btn').textContent = 'Update Datum';
+    _setExportsEnabled(true);
+}
+
+function _resetDatum() {
+    _datumSet = false;
+    if (window._viewer3d) window._viewer3d.setLayerDatumMarkers([]);
+    document.getElementById('datum-confirmed-notice').classList.add('hidden');
+    document.getElementById('datum-pending-notice').classList.remove('hidden');
+    document.getElementById('datum-reset-btn').classList.add('hidden');
+    document.getElementById('datum-set-btn').textContent = 'Set Datum';
+    _setExportsEnabled(false);
+}
+
+function _setExportsEnabled(enabled) {
+    const ids = [
+        'export-excel-btn', 'export-ubars-btn', 'export-struts-btn',
+        'export-slab-btn', 'export-report-btn', 'export-template-dxf-btn',
+        'export-combined-dxf-btn', 'export-face-dxf-btn'
+    ];
+    ids.forEach(id => {
+        const btn = document.getElementById(id);
+        if (!btn) return;
+        if (enabled) btn.removeAttribute('disabled');
+        else         btn.setAttribute('disabled', '');
+    });
+    if (enabled) _applySecondaryGates();
+}
+
+function _applySecondaryGates() {
+    // C01 gate on top of datum gate
+    if (_parserRejected) {
+        ['export-ubars-btn', 'export-struts-btn', 'export-slab-btn']
+            .forEach(id => document.getElementById(id)?.setAttribute('disabled', ''));
+    }
+    // C01 report — show/hide (hidden = not available; shown+enabled = available)
+    const reportBtn = document.getElementById('export-report-btn');
+    if (reportBtn) {
+        reportBtn.classList.toggle('hidden', _parserRejected);
+        if (_parserRejected) reportBtn.setAttribute('disabled', '');
+    }
+    // Template DXF gate: VS/HS coupler presence
+    const templateDxfBtn = document.getElementById('export-template-dxf-btn');
+    if (templateDxfBtn) {
+        const hasVSHS = [..._couplerMap.values()].some(c => /^(VS|HS)/i.test(c.layer || ''));
+        templateDxfBtn.classList.toggle('hidden', !hasVSHS);
+        if (!hasVSHS) templateDxfBtn.setAttribute('disabled', '');
+    }
+    // Slab EDB visibility
+    const slabBtn = document.getElementById('export-slab-btn');
+    const wallEdb = document.getElementById('edb-wall-section');
+    if (_isSlabCage) {
+        if (slabBtn)  { slabBtn.style.display = 'inline-block'; if (_parserRejected) slabBtn.setAttribute('disabled', ''); }
+        if (wallEdb)  wallEdb.style.display = 'none';
+    } else {
+        if (slabBtn)  slabBtn.style.display = 'none';
+        if (wallEdb)  wallEdb.style.display = '';
+    }
+    // Face/combined DXF — only enable if BREP is ready
+    if (!_brepReady) {
+        document.getElementById('export-face-dxf-btn')?.setAttribute('disabled', '');
+        document.getElementById('export-combined-dxf-btn')?.setAttribute('disabled', '');
     }
 }
 
@@ -337,30 +511,15 @@ function displayResults(parser) {
     _parserRejected = rejected;
     _isSlabCage = IFCParser.isSlabCage(allData);
 
-    // Show/hide slab vs wall EDB buttons
-    const slabBtn  = document.getElementById('export-slab-btn');
-    const wallEdb  = document.getElementById('edb-wall-section');
+    // Slab vs wall EDB section visibility (buttons remain disabled until datum set)
+    const slabBtnD  = document.getElementById('export-slab-btn');
+    const wallEdbD  = document.getElementById('edb-wall-section');
     if (_isSlabCage) {
-        if (slabBtn)  { slabBtn.style.display = 'inline-block'; slabBtn.disabled = rejected; }
-        if (wallEdb)  wallEdb.style.display = 'none';
+        if (slabBtnD) slabBtnD.style.display = 'inline-block';
+        if (wallEdbD) wallEdbD.style.display = 'none';
     } else {
-        if (slabBtn)  slabBtn.style.display = 'none';
-        if (wallEdb)  wallEdb.style.display = '';
-        document.getElementById('export-ubars-btn').disabled  = rejected;
-        document.getElementById('export-struts-btn').disabled = rejected;
-    }
-
-    const reportBtn = document.getElementById('export-report-btn');
-    if (reportBtn) reportBtn.classList.toggle('hidden', rejected);
-
-    const templateDxfBtn = document.getElementById('export-template-dxf-btn');
-    if (templateDxfBtn) {
-        // Template DXF is formwork geometry — depends only on IFCBEAM coupler positions,
-        // not bar weights or schedule data. It must NOT be gated by C01 rejection.
-        // Formwork plates are fabricated before the cage arrives — blocking on C01 would
-        // delay the works. Gate only on VS/HS coupler presence.
-        const hasVSHS = [..._couplerMap.values()].some(c => /^(VS|HS)/i.test(c.layer || ''));
-        templateDxfBtn.classList.toggle('hidden', !hasVSHS);
+        if (slabBtnD) slabBtnD.style.display = 'none';
+        if (wallEdbD) wallEdbD.style.display = '';
     }
 
     // Populate face-view dropdown and show section
@@ -372,30 +531,6 @@ function displayResults(parser) {
     if (fvSelect && faceLayers.length) {
         fvSelect.innerHTML = faceLayers.map(l => `<option value="${l}">${l}</option>`).join('');
         if (fvSection) fvSection.classList.remove('hidden');
-        // Keep buttons disabled until BREP finishes loading
-        const faceBtn = document.getElementById('export-face-dxf-btn');
-        if (faceBtn) { faceBtn.disabled = true; faceBtn.title = 'Waiting for 3D geometry to load…'; }
-        const combinedBtn = document.getElementById('export-combined-dxf-btn');
-        if (combinedBtn) { combinedBtn.disabled = true; combinedBtn.title = 'Waiting for 3D geometry to load…'; }
-    }
-
-    // Reveal datum side control and auto-detect Left/Right from cage geometry
-    const datumSideCtrl = document.getElementById('datum-side-control');
-    if (datumSideCtrl) datumSideCtrl.classList.remove('hidden');
-    const datumSideSelect = document.getElementById('datum-side-select');
-    if (datumSideSelect) datumSideSelect.value = _detectDatumSide();
-
-    // Slab face control — only for slab cages (sepAxis='z'). Defaults to 'bottom'
-    // (conventional datum position = lowest H-bar crossing within each layer).
-    const slabFaceCtrl = document.getElementById('slab-face-control');
-    const slabFaceSelect = document.getElementById('slab-face-select');
-    if (slabFaceCtrl) {
-        if (_detectFaceSepAxis() === 'z') {
-            slabFaceCtrl.classList.remove('hidden');
-            if (slabFaceSelect) slabFaceSelect.value = 'bottom';
-        } else {
-            slabFaceCtrl.classList.add('hidden');
-        }
     }
 
     autoFillEDBInputs();
@@ -849,6 +984,7 @@ function exportCSV(filename) {
 // ── Export Excel (SheetJS) ──────────────────────────────────────────────
 
 function exportXLSX() {
+    if (!_datumSet) { alert('Set datum before exporting.'); return; }
     if (!allData.length) { alert('No data to export.'); return; }
     if (typeof XLSX === 'undefined') { alert('Excel library not loaded. Check your connection.'); return; }
 
@@ -913,8 +1049,8 @@ function exportXLSX() {
     XLSX.utils.book_append_sheet(wb, ws2, 'Layer Summary');
 
     // ── Filename with cage ref if available ───────────────────────────
-    const cageRef = (document.getElementById('ifc-filename').textContent || 'cage')
-        .replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 40);
+    const cageRef = (_cageReference || (document.getElementById('ifc-filename').textContent || 'cage')
+        .replace(/\.[^.]+$/, '')).replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 40);
     XLSX.writeFile(wb, `${cageRef}_rebar_schedule.xlsx`);
 }
 
@@ -1069,6 +1205,7 @@ function updateEDBComputedInfo() {
 }
 
 async function exportEDB(type) {
+    if (!_datumSet) { alert('Set datum before exporting.'); return; }
     if (!allData.length) { alert('No data to export.'); return; }
     if (_parserRejected) { alert('C01 rejected — EDB cannot be exported for a rejected cage. Resolve all C01 issues first.'); return; }
     if (typeof XlsxPopulate === 'undefined') { alert('Excel library not loaded.'); return; }
@@ -1150,8 +1287,8 @@ async function exportEDB(type) {
         const cageHeightMm = _wasm3DDims ? _wasm3DDims.edbHeight : null;
         if (cageHeightMm != null) setVal('H19', cageHeightMm > 5600 ? 'Bespoke' : 'Pallet line');
 
-        const cageRef = (document.getElementById('ifc-filename').textContent || 'cage')
-            .replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 40);
+        const cageRef = (_cageReference || (document.getElementById('ifc-filename').textContent || 'cage')
+            .replace(/\.[^.]+$/, '')).replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 40);
 
         const outBuf = await wb.outputAsync();
         const blob = new Blob([outBuf], { type: 'application/vnd.ms-excel.sheet.macroenabled.12' });
@@ -1169,6 +1306,7 @@ async function exportEDB(type) {
 
 // ── Slab EDB Excel ────────────────────────────────────────────────────
 async function exportSlabEDB() {
+    if (!_datumSet) { alert('Set datum before exporting.'); return; }
     if (!allData.length) { alert('No data to export.'); return; }
     if (_parserRejected) { alert('C01 rejected — EDB cannot be exported for a rejected cage.'); return; }
     if (typeof XlsxPopulate === 'undefined') { alert('Excel library not loaded.'); return; }
@@ -1208,8 +1346,8 @@ async function exportSlabEDB() {
         // H42: production line classification (> 5600mm = Bespoke, else Pallet line)
         if (sd.cageHeight != null) ws.cell('H42').value(sd.cageHeight > 5600 ? 'Bespoke' : 'Pallet line');
 
-        const cageRef = (document.getElementById('ifc-filename').textContent || 'cage')
-            .replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 40);
+        const cageRef = (_cageReference || (document.getElementById('ifc-filename').textContent || 'cage')
+            .replace(/\.[^.]+$/, '')).replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 40);
 
         const outBuf = await wb.outputAsync();
         const blob = new Blob([outBuf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
@@ -1228,6 +1366,7 @@ async function exportSlabEDB() {
 // ── Cage Review Report (C01 approved only) ────────────────────────────
 
 async function exportCageReport() {
+    if (!_datumSet) { alert('Set datum before exporting.'); return; }
     if (!allData.length) { alert('No data loaded.'); return; }
     if (_parserRejected) { alert('C01 rejected — report can only be generated for approved cages.'); return; }
     if (typeof ExcelJS === 'undefined') { alert('ExcelJS library not loaded.'); return; }
@@ -1245,8 +1384,8 @@ async function exportCageReport() {
             sideImg  = views.side;
         }
 
-        const cageRef  = (document.getElementById('ifc-filename').textContent || 'cage')
-            .replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 40);
+        const cageRef  = (_cageReference || (document.getElementById('ifc-filename').textContent || 'cage')
+            .replace(/\.[^.]+$/, '')).replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 40);
         const widthMm  = getCageWidthMm();
         const lengthMm = getCageLengthMm();
         const heightMm = _wasm3DDims ? _wasm3DDims.edbHeight : null;
@@ -2156,6 +2295,7 @@ function _getDatumBarEnds(faceName, datumSide, heightSide, faceSepAxis, useLongY
 }
 
 function exportFaceViewDXF(faceLayerName) {
+    if (!_datumSet) { alert('Set datum before exporting.'); return; }
     if (!allData.length) { alert('No cage data loaded.'); return; }
 
     // Default to first detected face layer
@@ -2257,9 +2397,8 @@ function exportFaceViewDXF(faceLayerName) {
              '10', x.toFixed(1), '20', z.toFixed(1), '30', '0.0',
              '40', h.toFixed(1), '1', String(txt));
 
-    const fileEl  = document.getElementById('ifc-file');
-    const fname   = fileEl?.files[0]?.name || 'CAGE';
-    const cageRef = fname.replace(/\.[^.]+$/, '');
+    const cageRef = _cageReference ||
+        (document.getElementById('ifc-file')?.files[0]?.name || 'CAGE').replace(/\.[^.]+$/, '');
 
     emit('0','SECTION',
          '2','HEADER',
@@ -2313,6 +2452,7 @@ function exportFaceViewDXF(faceLayerName) {
 // All coordinates in real IFC mm — state "Scale 1:15" in title for plotting.
 // Both layers share _cageDatum() so face view and template holes register exactly.
 async function exportCombinedFaceDXF() {
+    if (!_datumSet) { alert('Set datum before exporting.'); return; }
     const btn = document.getElementById('export-combined-dxf-btn');
     const orig = btn.textContent;
     btn.textContent = 'Generating…'; btn.disabled = true;
@@ -2373,8 +2513,8 @@ async function exportCombinedFaceDXF() {
             TEXT(x+8, (z0+z1)/2-4, String(label), 8, 'DIMS');
         };
 
-        const fileEl  = document.getElementById('ifc-file');
-        const cageRef = (fileEl?.files[0]?.name || 'CAGE').replace(/\.[^.]+$/, '');
+        const cageRef = _cageReference ||
+            (document.getElementById('ifc-file')?.files[0]?.name || 'CAGE').replace(/\.[^.]+$/, '');
 
         emit('0','SECTION','2','HEADER',
              '9','$ACADVER','1','AC1009',
@@ -2703,6 +2843,7 @@ function buildZip(files) {
 }
 
 async function exportTemplateDXF(maxLength, maxWidth) {
+    if (!_datumSet) { alert('Set datum before exporting.'); return; }
     const btn  = document.getElementById('export-template-dxf-btn');
     const orig = btn.textContent;
     const yield_ = () => new Promise(r => setTimeout(r, 0));
@@ -2724,10 +2865,9 @@ async function exportTemplateDXF(maxLength, maxWidth) {
         const faceSepAxis   = _detectFaceSepAxis();
 
         // UI fields for naming + datum bar end detection
-        const fileEl   = document.getElementById('ifc-file');
-        const fname    = fileEl?.files[0]?.name || 'CAGE';
-        const prodNum  = document.getElementById('production-number')?.value?.trim() || '';
-        const cageRef  = document.getElementById('cage-reference')?.value?.trim() || fname.replace(/\.[^.]+$/, '');
+        const prodNum  = _productionNumber || document.getElementById('production-number')?.value?.trim() || '';
+        const cageRef  = _cageReference || document.getElementById('cage-reference')?.value?.trim() ||
+            (document.getElementById('ifc-file')?.files[0]?.name || 'CAGE').replace(/\.[^.]+$/, '');
         const datumSide   = document.getElementById('datum-side-select')?.value  || 'left';
         const heightSide  = document.getElementById('slab-face-select')?.value  || 'bottom';
         const suffix   = maxLength === 2000 ? 'prod' : 'test';
