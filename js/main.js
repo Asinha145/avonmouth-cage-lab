@@ -2571,9 +2571,6 @@ async function exportCombinedFaceDXF() {
             TEXT(x+8, (z0+z1)/2-4, String(label), 8, 'DIMS');
         };
 
-        const cageRef = _cageReference ||
-            (document.getElementById('ifc-file')?.files[0]?.name || 'CAGE').replace(/\.[^.]+$/, '');
-
         emit('0','SECTION','2','HEADER',
              '9','$ACADVER','1','AC1009',
              '9','$INSUNITS','70','4',
