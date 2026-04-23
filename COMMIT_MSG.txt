@@ -1,0 +1,21 @@
+Filter coupler holes by BYLOR.connected_rebar to eliminate duplicate holes
+
+Problem: Multiple couplers can exist at the same XY position (one connecting to rebar, one bridging). Previous code generated holes for all couplers, causing duplicates.
+
+Solution: Filter couplers via BYLOR.connected_rebar property linkage
+- Extract connected_rebar from Bylor psets in both ifc-parser.js and _parseIFCBeamHoles()
+- Only generate holes for couplers that:
+  1. Have a valid connected_rebar GlobalId (not bridging/assembly couplers)
+  2. The referenced rebar exists in allData
+  3. The rebar is a VS or HS bar (strut/connector, not mesh)
+- Bridging couplers (no connected_rebar link) are filtered out automatically
+
+Implementation:
+- ifc-parser.js: extractCouplerHeads() now stores connectedRebar in coupler map
+- ifc-parser.js: extractProperties() extracts connected_rebar from Bylor psets
+- main.js: _parseIFCBeamHoles() extracts beamConnectedRebar mapping from Bylor psets
+- main.js: Beams array now includes connectedRebar field
+- main.js: Filter validates coupler-rebar linkage before hole generation
+
+Tests: All regression tests pass (node test-dims.mjs ✓)
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>

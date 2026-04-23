@@ -226,6 +226,7 @@ class IFCParser {
                 const nl = n.toLowerCase();
                 if      (nl === 'source_global_id') bar.Source_Global_ID    = v;
                 else if (nl === 'rebar_id')          bar.Rebar_ID            = v;
+                else if (nl === 'connected_rebar')   bar.Connected_Rebar     = v;  // ← coupler link to rebar
                 // ── Weight: only from vendor rebar psets (ATK/ICOS/INGEROP) — per-bar value.
                 // Case-insensitive: ATK/ICOS use 'Weight', INGEROP uses 'WEIGHT'.
                 // 'WEIGHT_TOTAL' / 'WEIGHT_TOTAL_IN_GROUP' don't match nl==='weight' (exact equality).
@@ -287,6 +288,7 @@ class IFCParser {
                 Name               : '',
                 Avonmouth_Layer_Set: null,
                 ATK_Layer_Name     : null,
+                Connected_Rebar    : null,  // ← from Bylor pset 'connected_rebar' property
 
             };
             this.extractProperties(m[1], obj);
@@ -295,6 +297,7 @@ class IFCParser {
                 globalId     : m[2],
                 layer        : obj.Avonmouth_Layer_Set,
                 atkLayerName : obj.ATK_Layer_Name,
+                connectedRebar : obj.Connected_Rebar,  // ← store the link to rebar GlobalId
 
             });
         });

@@ -1625,6 +1625,24 @@ function _parseIFCBeamHoles(ifcText) {
         }
     }
 
+    // Connected Rebar per IFCBEAM from Bylor pset — links coupler to its connected rebar via GlobalId
+    const beamConnectedRebar = {};
+    for (const m of ifcText.matchAll(/#(\d+)=IFCRELDEFINESBYPROPERTIES\([^;]+;/g)) {
+        const rel = m[0];
+        const psetId = rel.match(/,#(\d+)\s*\)\s*;/)?.[1]; if (!psetId) continue;
+        const pset = getEntity(psetId); if (!pset?.includes("'Bylor'")) continue;
+        let cr = null;
+        for (const pid of [...pset.matchAll(/#(\d+)/g)].map(x => x[1])) {
+            const prop = getEntity(pid);
+            if (prop?.includes("'connected_rebar'")) { const v = prop.match(/IFCTEXT\('([^']+)'\)/)?.[1]; if (v) { cr = v; break; } }
+        }
+        if (!cr) continue;
+        const mm = rel.match(/,\(([^)]*#[^)]*)\),#\d+\)/); if (!mm) continue;
+        for (const b of mm[1].matchAll(/#(\d+)/g)) {
+            const e = getEntity(b[1]); if (e?.includes('IFCBEAM(')) beamConnectedRebar[b[1]] = cr;
+        }
+    }
+
     // Collect all IFCBEAM positions + barrel direction
     const beams = [];
     for (const m of ifcText.matchAll(/#(\d+)=IFCBEAM\(([^;]+);/g)) {
@@ -1640,7 +1658,12 @@ function _parseIFCBeamHoles(ifcText) {
                     const pdM = bdata.match(/'PD(\d+)\*/);
                     if (pdM) od = parseFloat(pdM[1]);
                 }
-                beams.push({ xMm: bx, yMm: by, zMm: bz, od, layer: beamLayer[bid] ?? null, zDir: info.zDir });
+                beams.push({
+                    xMm: bx, yMm: by, zMm: bz, od,
+                    layer: beamLayer[bid] ?? null,
+                    zDir: info.zDir,
+                    connectedRebar: beamConnectedRebar[bid] ?? null  // ← store the linked rebar GlobalId
+                });
                 break;
             }
         }
@@ -1660,7 +1683,21 @@ function _parseIFCBeamHoles(ifcText) {
     const meshMin = meshVals.length ? Math.min(...meshVals) : -Infinity;
     const meshMax = meshVals.length ? Math.max(...meshVals) :  Infinity;
 
-    return beams
+    // Filter out bridging couplers: only keep couplers that have a valid connectedRebar link
+    // and that rebar is a VS or HS bar. This avoids duplicate holes at the same position.
+    const validBeams = beams.filter(b => {
+        // Bridging couplers (no connected_rebar) are filtered out
+        if (!b.connectedRebar) return false;
+        // Check if the connected rebar exists and is a VS/HS bar
+        const rebarGlobalId = b.connectedRebar;
+        const rebar = allData.find(bar => bar.GlobalId === rebarGlobalId);
+        if (!rebar) return false;
+        // Only keep if rebar is VS or HS (strut/coupler rebar, not mesh)
+        const layer = (rebar.Avonmouth_Layer_Set || '').toUpperCase();
+        return /^[VH]S/i.test(layer);
+    });
+
+    return validBeams
         .filter(b => {
             if (!b.od) return false;
             const layer = b.layer || '';
