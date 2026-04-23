@@ -122,9 +122,54 @@ Slide amount per bar is logged to console: `[COG] PRL slid -320mm: PRL1`
 
 ---
 
+---
+
+## COG DXF Export (NEW — 24 Apr 2026)
+
+### What It Produces
+
+A single AC1009 DXF file (`{prodNum}-{cageRef}-COG.dxf`) showing:
+- **External face BREP outline** (same as site template DXF) — full bar geometry
+- **COG marker** — circle (r=15) + crosshair (±25)
+- **Dimension lines** — horizontal and vertical from datum bar fixed end to COG
+- **Stats label** — COG weight + number of bars contributing
+
+### Layers
+
+| Layer | Colour | Contents |
+|---|---|---|
+| `OUTLINE` | Green (3) | BREP bar hull of external face (T1A/B1A for slab, N1A for wall) |
+| `COG` | Red (1) | COG marker circle + crosshair |
+| `DIMS` | White (7) | HDIM + VDIM from datum bar end to COG centre |
+| `TEXT` | White (7) | COG weight/bars label, drawing title, datum note |
+
+### Coordinates
+
+Uses same datum origin as site template DXF (`_cageDatum()`). 
+COG position projected to 2D plot space:
+```
+cogPx = cog.ifcX − datumPx (or ifcY − datumPx per sepAxis)
+cogPz = cog.ifcZ − datumPz (always vertical)
+```
+
+Dimension origin (datum bar end) from `_getDatumBarEnds()`:
+```
+HDIM(hBarEndPx, cogPx, cogPz+80, mm_label)  — horizontal gap
+VDIM(hBarEndPx−100, vBarEndPz, cogPz, mm_label)  — vertical gap
+```
+
+### Button
+
+- **📍 COG DXF** — appears in export section
+- Gated by `_datumSet` (requires "Set Datum" first)
+- Disabled if BREP not loaded or COG data not available
+- Downloads `{prodNum}-{cageRef}-COG.dxf`
+
+---
+
 ## Known Limitations / Future Work
 
 - **PRL bars longer than the cage**: if `barMax − barMin > meshMax − meshMin` the bar is longer than the cage and cannot be fully slid inside. Current code applies the far-end correction only — the near end may still protrude. In practice this should not occur.
 - **PRC height axis**: uses `meshBbox.minY/maxY` (mesh bars only). If PRC bars extend into slab slabs beyond the mesh, this is correct behaviour — but verify on slab cages.
 - **No visual correction**: the gold COG sphere reflects the transport position but the bars in the viewer remain in their IFC (site) position. A future enhancement could render PRL/PRC in their transport position.
-- **DXF annotation**: S5-equivalent — mark the COG point on a cage elevation DXF with dimension lines to both ends. Not yet implemented.
+- **COG DXF external face detection**: currently hardcoded to N1A for walls, T1A/B1A for slabs. Improve by detecting which face is actually external (opposite from datum origin).

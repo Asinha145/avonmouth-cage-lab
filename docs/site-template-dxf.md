@@ -15,11 +15,11 @@ Each section overlays:
 
 | Layer | Colour | Contents |
 |---|---|---|
-| `BARS` | Green (3) | BREP bar hull outlines — real bar geometry (not centrelines) |
-| `HOLES` | Red (1) | Coupler hole circles — coupler OD + 2mm tolerance |
+| `BARS` | White (7) | BREP bar hull outlines — real bar geometry (not centrelines) |
+| `HOLES` | Red (1) | Coupler hole circles — coupler OD + 2mm tolerance (BYLOR-filtered: connected_rebar must exist + be VS/HS) |
 | `PLATE_OUTLINE` | Blue (5) | Plate rectangles — 25mm clearance from outermost hole edge |
-| `DIMS` | Grey (8) | Overall span dims + per-hole tick marks with mm labels |
-| `TEXT` | White (7) | Section title, plate IDs, datum note |
+| `DIMS` | Grey (8) | Overall span dims + per-hole tick marks + **chain dimensions from datum rebar fixed ends** |
+| `TEXT` | White (7) | Section title, plate IDs ({prod}-{cage}-{face}-{type}-{id}), datum note |
 | `TITLE_BLOCK` | White (7) | A4080 border, cells, drawing number, scale, date |
 
 ---
@@ -42,6 +42,37 @@ IFC file
 ```
 
 Both paths subtract the same `_cageDatum()` origin → exact overlay.
+
+---
+
+## Chain Dimensions (NEW — 24 Apr 2026)
+
+Each face section now includes **incremental dimension chains from the datum rebar fixed end** to each coupler hole position.
+
+### Design
+
+- **Per-layer chains**: VS1 gets its own dimension chain, VS2 another, HS1 another, etc.
+- **First dimension**: From the datum bar endpoint (`_getDatumBarEnds()` result) to the first hole in that layer
+- **Incremental dims**: Between consecutive holes (hole[n-1] → hole[n])
+- **Axis**: VS holes use VDIM (vertical axis, pz); HS holes use HDIM (horizontal axis, px)
+- **Offset**: Each layer's chain is staggered by 20mm to avoid overlap
+- **Activation**: Uses previously dead code `_getDatumBarEnds(faceName, datumSide, heightSide, sepAxis, useLongY, useY, datumPx, datumPz)` which finds the nearest endpoint of each datum bar (VS and HS) in the crossing region
+
+### Example (F1A section, datum side = left, height = bottom)
+
+```
+VS1 holes at pz: [1000, 2050, 3100]
+  VDIM: vBarEndPz → 1000    label: 1000
+  VDIM: 1000 → 2050        label: 1050
+  VDIM: 2050 → 3100        label: 1050
+
+HS1 holes at px: [500, 2000, 3500]
+  HDIM: hBarEndPx → 500     label: 500
+  HDIM: 500 → 2000          label: 1500
+  HDIM: 2000 → 3500         label: 1500
+```
+
+All dimensions appear at fixed offset distances (30mm outside plate cluster for VS, 50mm below datum point for HS) to ensure visibility.
 
 ---
 
@@ -156,9 +187,12 @@ Debug button (single face): **📐 Face View DXF** — BREP bar outlines only, n
 |---|---|
 | `_cageDatum()` | Shared datum from outermost face layer bar endpoints. |
 | `_detectFaceSepAxis()` | Geometry-based: 'x', 'y', or 'z' (slab). |
-| `exportCombinedFaceDXF()` | Main combined export with title block. |
+| `_getDatumBarEnds()` | Returns `{ hBarEndPx, vBarEndPz }` — fixed endpoints of datum VS and HS bars (used by chain dims). |
+| `_parseIFCBeamHoles()` | Extracts coupler holes + BYLOR filtering (connected_rebar must exist + be VS/HS layer). |
+| `exportCombinedFaceDXF()` | Main combined export with title block + chain dimensions. |
 | `exportFaceViewDXF(face)` | Single-face BREP bar outlines only (debug). |
 | `exportTemplateDXF()` | Standalone plate template (hole layout, stacked plate diagrams). |
+| `exportCOGDXF()` | COG export: external face BREP + COG marker + H/V dims from datum end. |
 | `getFaceLayerVertexClouds(layer)` | `js/viewer3d.js` — BREP vertex extraction per layer. |
 
 ---
@@ -176,8 +210,26 @@ Debug button (single face): **📐 Face View DXF** — BREP bar outlines only, n
 
 ---
 
+## Commits (Recent)
+
+| Hash | Description | Date |
+|---|---|---|
+| `8067718` | DXF improvements: template center hole, site template dims & cosmetics, COG export | 24 Apr 2026 |
+| `97b7100` | Fix: define prodNum and cageRef in exportCombinedFaceDXF | 24 Apr 2026 |
+| `7fa236b` | Fix: remove duplicate cageRef definition | 24 Apr 2026 |
+| `22cc55b` | Update COG DXF to use BREP geometry instead of line diagrams | 24 Apr 2026 |
+
+---
+
 ## Pending / Next Steps
 
+- [x] Chain dimensions from datum rebar fixed ends per layer — DONE 24 Apr 2026
+- [x] BARS layer color green → white — DONE 24 Apr 2026
+- [x] Remove CPLR text labels — DONE 24 Apr 2026
+- [x] BYLOR coupler filtering (connected_rebar + VS/HS layer check) — DONE 24 Apr 2026
+- [x] Template DXF center mounting hole — DONE 24 Apr 2026
+- [x] COG DXF export — DONE 24 Apr 2026
+- [ ] Test chain dimensions in real cages (verify stagger offset, label readability)
 - [ ] Test `A4080-EXP-XX-AF-DR-MA-20xxxx.dxf` in AutoCAD — confirm bar outlines and holes overlay correctly
 - [ ] Verify N1A face orientation (currently same left-right as F1A — may need mirror for "viewed from outside N1A")
 - [ ] Fill in title block fields: project name, originator logo, DRAWN/CHECKED/APPROVED, Purpose of Issue

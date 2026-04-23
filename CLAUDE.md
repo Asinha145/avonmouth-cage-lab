@@ -1,7 +1,7 @@
 # avonmouth-cage-lab — Context Map
 
 ## One-Line Summary
-Sandbox / active development fork of cage-v2. Coupler geometry, template DXF, face-view DXF, combined site-template DXF, multi-vendor IFC support. **cage-v2 is source of truth — cherry-pick only, never wholesale merge.**
+Sandbox / active development fork of cage-v2. Three-stage UI (passcode → production-number → datum gate). Coupler geometry, template DXF, site-template DXF with chain dimensions, COG DXF export, face-view DXF, multi-vendor IFC support. **cage-v2 is source of truth — cherry-pick only, never wholesale merge.**
 
 ---
 
@@ -9,9 +9,9 @@ Sandbox / active development fork of cage-v2. Coupler geometry, template DXF, fa
 
 | File | Lines | Purpose |
 |---|---|---|
-| `js/ifc-parser.js` | 1043 | IFC text parser — entity/pset extraction, bar resolution (placement chain → xyz), classification, cage-axis detection, stagger clustering, coupler head extraction, C01 rejection |
-| `js/viewer3d.js` | 682 | Three.js + web-ifc WASM renderer — BREP streaming, three-bbox computation, layer groups, 3D datum markers, plate boxes, orbit controls |
-| `js/main.js` | 3327 | UI orchestration (65+ functions) — file upload, parser→viewer pipeline, stats, tables, filtering/pagination, all export functions, EDB generation, step detection, PRL/PRC validation, datum side detection |
+| `js/ifc-parser.js` | 1043 | IFC text parser — entity/pset extraction, bar resolution (placement chain → xyz), classification, cage-axis detection, stagger clustering, coupler head extraction (BYLOR connected-rebar filtering), C01 rejection, cage-reference extraction |
+| `js/viewer3d.js` | 682 | Three.js + web-ifc WASM renderer — BREP streaming, three-bbox computation, layer groups, 3D datum markers, COG sphere, plate boxes, orbit controls |
+| `js/main.js` | 3500+ | UI orchestration (70+ functions) — passcode gate, production-number validation, cage-reference auto-extraction, datum gate (Set/Reset), file upload, parser→viewer pipeline, stats, tables, filtering/pagination, all export functions (CSV, XLSX, EDB wall, EDB slab, C01 report, template DXF, site template DXF, face view DXF, COG DXF), step detection, PRL/PRC validation, datum side detection, datum bar end extraction |
 | `index.html` | — | Entry point — upload form, 3D viewer, result cards, export buttons, EDB inputs, filter panels |
 | `css/style.css` | — | All styling (no framework) |
 | `test-dims.mjs` | — | Regression test — 5 dimension assertions on P7019_C1.ifc |
@@ -31,7 +31,14 @@ Sandbox / active development fork of cage-v2. Coupler geometry, template DXF, fa
 ## Data Flow
 
 ```
-IFC file upload
+Page Load
+  → Passcode gate (sessionStorage check; 4286 to unlock)
+  → Locked state: upload form hidden, exports hidden
+
+IFC file upload + Production Number (mandatory)
+  → Cage Viewer button enabled (file + production-number both filled)
+  → Production Number stored in _productionNumber global
+  → Cage Reference auto-extracted from IFC Avonmouth pset (or filename fallback)
   → FileReader (text + ArrayBuffer — two separate reads)
   → IFCParser.parseFile()          [ifc-parser.js]
       build entity/pset/relationship indexes
@@ -47,27 +54,40 @@ IFC file upload
       detect slab vs wall cage (_isSlabCage)
       populate face-view dropdown
   → Viewer3D.loadIFC(arrayBuffer)  [viewer3d.js — async]
-      StreamAllMeshes → three bboxes → datum markers → render
-      Output: _wasm3DDims {edbWidth, edbLength, edbHeight, overallHeight, overallWidth, overallLength}
+      StreamAllMeshes → three bboxes → COG sphere → datum markers → render
+      Output: _wasm3DDims {edbWidth, edbLength, edbHeight, overallHeight, overallWidth, overallLength, cog: {ifcX, ifcY, ifcZ, heightFromBase, totalWeight, barsUsed}}
+  → Datum gate appears
+      _brepReady = true → Datum Side dropdown + Height (for slab) + "Set Datum" button shown
+      All exports disabled (locked icon) until "Set Datum" clicked
+  → User selects Datum Side (+ Height for slab) + clicks "Set Datum"
+      _datumSet = true → all exports unlocked, confirmed notice shown
+      "Reset Datum" button shown (resets _datumSet = false, re-locks exports, re-shows datum markers at initial position)
+  
   → applyFilters() / renderTable() [main.js]
       allData[] → filteredData[] → paginated rows
-  → exports (gated by _parserRejected):
+  
+  → exports (gated by _datumSet AND _parserRejected):
       exportCSV()             CSV bar schedule
       exportXLSX()            Excel (stats + layer table + bar list)
       exportEDB('ubars'|'struts')   Wall cage EDB
       exportSlabEDB()         Slab cage EDB
       exportCageReport()      C01 report PDF
-      exportTemplateDXF()     VS/HS plate layout DXF
-      exportFaceViewDXF()     Bar outlines DXF (per face layer)
-      exportCombinedFaceDXF() Site template (600mm spacing)
+      exportTemplateDXF()     VS/HS plate layout DXF (+ center Ø5mm hole if plate > 500mm)
+      exportFaceViewDXF()     Bar outlines DXF (per face layer, BREP)
+      exportCombinedFaceDXF() Site template DXF (BREP bars + coupler holes + chain dims from datum end per layer)
+      exportCOGDXF()          COG DXF (external face BREP + COG marker + H/V dims from datum end)
 ```
 
 **Key state variables (main.js):**
+- `_productionNumber` — production number entered before Cage Viewer (mandatory)
+- `_cageReference` — cage reference auto-extracted from IFC Avonmouth pset (or filename fallback)
+- `_datumSet` — true after user clicks "Set Datum"; false after "Reset Datum" or processFile() start
+- `_brepReady` — true after BREP loads; gates datum block visibility
 - `allData[]` — full bar array from parser (constant per file)
 - `filteredData[]` — search/filter subset
-- `_wasm3DDims` — BREP dimensions (overrides parser bbox)
-- `_couplerMap` — Map<expressID, {layer, weight}> for IFCBEAM coupler heads
-- `_parserRejected` — C01 gate (blocks all exports)
+- `_wasm3DDims` — BREP dimensions (edbWidth, edbLength, edbHeight, cog, etc.)
+- `_couplerMap` — Map<expressID, {layer, weight}> for IFCBEAM coupler heads (BYLOR-filtered)
+- `_parserRejected` — C01 gate (blocks EDB/report exports)
 - `_isSlabCage` — gates wall vs slab EDB buttons
 - `_rawIfcText` — retained for DXF generation
 
@@ -185,6 +205,45 @@ python -m http.server 8000      # local dev server (WASM needs HTTP, not file://
 - Every new feature must handle all three `sepAxis` cases (`'x'`, `'y'`, `'z'`)
 - H36/I36 slab EDB cells from bar `Length` property — never from world-axis coordinate extents
 
+### Three-Stage UI Flow (LOCKED)
+
+**Stage 1: Passcode Gate**
+- Passcode: `'4286'` (change before production deploy)
+- Stores unlock in `sessionStorage` — persists until browser closed
+- Only thing visible on page load: passcode card
+
+**Stage 2: Upload + Production Number**
+- After unlock, upload form visible
+- "Cage Viewer" button disabled until BOTH file + production number filled
+- Cage Reference auto-populated from `parser.cageReference` (extracted from IFC Avonmouth pset, case-insensitive keys: Building, Pour, Site, Cage)
+- If extraction fails: Cage Reference input is editable + warning indicator
+
+**Stage 3: Datum Gate**
+- After BREP loads (3D viewer rendered): datum block appears
+- Datum Side dropdown auto-detected from geometry (`_detectDatumSide()`)
+- For slab cages (sepAxis === 'z'): additional Datum Height dropdown (Top/Bottom)
+- All 8 export buttons disabled (locked icon) until "Set Datum" clicked
+- User selects datum side and clicks "Set Datum" → `_datumSet = true` → exports unlock
+- "Reset Datum" button becomes visible; clicking it re-locks exports + re-shows datum markers at initial position
+
+**Secondary Gates (stacked on datum gate):**
+- C01 rejection: EDB + Report buttons stay disabled even if datum set
+- VSHS presence: Template DXF button stays disabled if cage has no VS/HS bars
+- Slab/wall: Slab EDB button only visible for slab cages
+
+### DXF Export Architecture
+
+Three DXF types, each using `_cageDatum()` as shared origin:
+
+| Export | Content | BREP | Datum | Filename |
+|---|---|---|---|---|
+| Template DXF | Plate layout (VS/HS holes + centerline outlines) | LINE diagram (bar endpoints) | Via coord transform | `{prodNum}-{cageRef}-template.dxf` |
+| Site Template DXF | Full BREP + coupler holes + dimension chains from datum end per rebar layer | BREP convexHull2D (full geometry) | Subtracted from coords | `{prodNum}-{cageRef}-site-template.dxf` |
+| Face View DXF | Single face BREP outline only (debug) | BREP convexHull2D | Subtracted from coords | `{cageRef}-{faceName}.dxf` |
+| COG DXF | External face BREP + COG marker circle + H/V dims from datum bar end | BREP convexHull2D | Subtracted from coords + used for dim origin | `{prodNum}-{cageRef}-COG.dxf` |
+
+All use same DXF 2D helpers: `LINE(x0, z0, x1, z1, layer)`, `CIRCLE(x, z, r, layer)`, `TEXT(x, z, str, h, layer)`, `HDIM(x0, x1, z, label)`, `VDIM(x, z0, z1, label)`.
+
 ---
 
 ## Entry Points for Common Tasks
@@ -216,7 +275,13 @@ python -m http.server 8000      # local dev server (WASM needs HTTP, not file://
 
 1. **Coupler geometry investigation** (`tasks/pop.md`) — CLOSED 31 Mar 2026
 2. **Template DXF** — COMPLETE 31 Mar 2026. Verified on P7349, 1613, 1704, RF35 (162 holes).
-3. **EDB template making** — ONGOING (local only, templates gitignored)
+3. **Three-Stage UI Refactor** — COMPLETE 24 Apr 2026. Passcode → Production Number → Datum Gate. Cage Reference auto-extraction from IFC.
+4. **BYLOR Coupler Hole Filtering** — COMPLETE 24 Apr 2026. Template DXF filters couplers via `connected_rebar` pset property + layer validation (VS/HS only).
+5. **DXF Improvements** — COMPLETE 24 Apr 2026:
+   - Template DXF: center Ø5mm mounting hole when plate > 500mm (either dimension)
+   - Site Template DXF: removed CPLR text labels, BARS layer green→white, added plate naming format, activated chain dimensions from datum rebar fixed ends per layer
+   - COG DXF: new export with external face BREP, COG marker circle, H/V dimensions from datum bar end
+6. **EDB template making** — ONGOING (local only, templates gitignored)
 
 ---
 
