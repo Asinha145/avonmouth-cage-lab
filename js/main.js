@@ -1688,13 +1688,26 @@ function _parseIFCBeamHoles(ifcText) {
     const validBeams = beams.filter(b => {
         // Bridging couplers (no connected_rebar) are filtered out
         if (!b.connectedRebar) return false;
-        // Check if the connected rebar exists and is a VS/HS bar
+
+        // Check if the connected rebar exists in allData and is a VS/HS bar
         const rebarGlobalId = b.connectedRebar;
         const rebar = allData.find(bar => bar.GlobalId === rebarGlobalId);
-        if (!rebar) return false;
+
+        // If rebar not found in allData, exclude this coupler
+        // (rebar may not have been extracted due to vendor filtering or other issues)
+        if (!rebar) {
+            console.log(`[_parseIFCBeamHoles] Rebar ${rebarGlobalId} not found in allData - excluding coupler (OD=${b.od})`);
+            return false;
+        }
+
         // Only keep if rebar is VS or HS (strut/coupler rebar, not mesh)
         const layer = (rebar.Avonmouth_Layer_Set || '').toUpperCase();
-        return /^[VH]S/i.test(layer);
+        if (!/^[VH]S/i.test(layer)) {
+            console.log(`[_parseIFCBeamHoles] Rebar ${rebarGlobalId} is ${layer} (not VS/HS) - excluding coupler (OD=${b.od})`);
+            return false;
+        }
+
+        return true;
     });
 
     return validBeams
