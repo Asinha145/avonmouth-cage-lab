@@ -2517,6 +2517,10 @@ async function exportCombinedFaceDXF() {
         const viewer = window._viewer3d;
         if (!viewer || !viewer.brepLoaded) throw new Error('3D geometry not loaded — wait for 3D view to finish.');
 
+        // ── Production number and cage reference ────────────────────────────────
+        const prodNum = _productionNumber || '';
+        const cageRef = _cageReference || 'cage';
+
         // ── shared helpers ────────────────────────────────────────────────────
         const { datumPx, datumPz } = _cageDatum();
         const sepAxis = _detectFaceSepAxis();
