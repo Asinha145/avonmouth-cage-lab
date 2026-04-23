@@ -1012,10 +1012,12 @@ IFCParser.prototype.extractSlabData = function(bars) {
         const vals = bs.flatMap(b => [b[`Start_${axis}`], b[`End_${axis}`]]).filter(v => v != null && isFinite(v));
         return vals.length >= 2 ? Math.max(...vals) - Math.min(...vals) : 0;
     };
-    // cageAxisName='X' → T1/B1 run along X (height), T2/B2 run along Y (length)
-    // cageAxisName='Y' → T1/B1 run along Y (height), T2/B2 run along X (length)
-    const hgtAxis = this.cageAxisName === 'Y' ? 'Y' : 'X';
-    const lenAxis = this.cageAxisName === 'Y' ? 'X' : 'Y';
+    // T2 bars are horizontal — their Dir_X/Dir_Y vectors point along the cage length axis.
+    // Sum |Dir_X| vs |Dir_Y| across all T2 bars; the dominant direction is the length axis.
+    const t2DirX = t2.reduce((s, b) => s + Math.abs(b.Dir_X ?? 0), 0);
+    const t2DirY = t2.reduce((s, b) => s + Math.abs(b.Dir_Y ?? 0), 0);
+    const lenAxis = (!t2.length || t2DirX === t2DirY) ? 'X' : (t2DirX > t2DirY ? 'X' : 'Y');
+    const hgtAxis = lenAxis === 'X' ? 'Y' : 'X';
     // H36: max face extent — computed per face then max'd to avoid inflating by T2/B2 face offset
     const lenMm = Math.max(extentMm(t2, lenAxis), extentMm(b2, lenAxis));
     // I36: max face extent — stagger-aware (B1-CPLR/T1-CPLR lapper bars extend beyond main bar end)

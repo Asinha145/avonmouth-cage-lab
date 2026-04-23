@@ -202,7 +202,8 @@ async function processFile() {
                     const arrayBuffer = await readFileAsBuffer(file);
                     const barMap = new Map();
                     allData.forEach(b => barMap.set(parseInt(b._entityId, 10), b));
-                    const dims = await window._viewer3d.loadIFC(arrayBuffer, barMap, cageAxisName, _couplerMap);
+                    const faceSepAxis = _detectFaceSepAxis();
+                    const dims = await window._viewer3d.loadIFC(arrayBuffer, barMap, faceSepAxis, _couplerMap);
                     if (dims) _updateDimBoxesFromBREP(dims);
                     _buildViewerCheckboxes();
                     const datumSide  = document.getElementById('datum-side-select')?.value  || 'left';
@@ -556,10 +557,6 @@ function _buildViewerLegend(layers) {
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────
-
-function dotCage(b) {
-    return Math.abs(b.Dir_X * cageAxis[0] + b.Dir_Y * cageAxis[1] + b.Dir_Z * cageAxis[2]);
-}
 
 function countUniqueHorizPositions(hBars) {
     if (!hBars.length) return { count: 0 };

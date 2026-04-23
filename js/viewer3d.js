@@ -111,10 +111,10 @@ class Viewer3D {
     /**
      * @param {ArrayBuffer} arrayBuffer  — raw IFC file bytes
      * @param {Map<number, Object>} barMap — Map<expressID, bar> from parser
-     * @param {string} [cageAxisName='Z'] — cage long axis from parser ('X'|'Y'|'Z')
-     *   Used to assign meshLength vs meshWidth without relying on a min/max heuristic.
+     * @param {string} [faceSepAxis='z'] — face separation axis from _detectFaceSepAxis()
+     *   'x' = faces separated on IFC-X, 'y' = faces separated on IFC-Y, 'z' = slab
      */
-    async loadIFC(arrayBuffer, barMap, cageAxisName = 'Z', couplerMap = new Map()) {
+    async loadIFC(arrayBuffer, barMap, faceSepAxis = 'z', couplerMap = new Map()) {
         // Clear previous scene geometry (keep lights)
         const lights = [];
         this.scene.traverse(o => { if (o.isLight) lights.push(o); });
@@ -343,7 +343,7 @@ class Viewer3D {
         const _h = (tb.minY === Infinity) ? '?' : Math.round((tb.maxY - tb.minY) * 1000);
         const _x = (tb.minX === Infinity) ? '?' : Math.round((tb.maxX - tb.minX) * 1000);
         const _z = (tb.minZ === Infinity) ? '?' : Math.round((tb.maxZ - tb.minZ) * 1000);
-        console.log(`[Viewer3D] ${barCount} bars | ${geomCount} geometry chunks | totalBbox: IFC-X=${_x}mm IFC-Z(height)=${_h}mm IFC-Y=${_z}mm | cageAxis=${cageAxisName}`);
+        console.log(`[Viewer3D] ${barCount} bars | ${geomCount} geometry chunks | totalBbox: IFC-X=${_x}mm IFC-Z(height)=${_h}mm IFC-Y=${_z}mm | faceSepAxis=${faceSepAxis}`);
 
         // Hide placeholder text once geometry is in the scene
         const ph = document.getElementById('viewer-placeholder');
@@ -351,7 +351,7 @@ class Viewer3D {
 
         this._fitCamera();
         this._addCOGMarker();
-        return this._buildDimensions(cageAxisName);
+        return this._buildDimensions(faceSepAxis);
     }
 
     // ── Dimensions from BREP bboxes (IFC mm) ────────────────────────────
@@ -361,10 +361,10 @@ class Viewer3D {
      *   wy → IFC Z / 1000  ← vertical axis, always height regardless of cageAxisName
      *   wz → -IFC Y / 1000 ← span magnitude = IFC Y span
      *
-     * cageAxisName ('X'|'Y'|'Z') — cage long axis from parser:
-     *   'X' → long axis is IFC X → spanX = length, spanY = width
-     *   'Y' → long axis is IFC Y → spanY = length, spanX = width
-     *   'Z' → cage is vertical (typical wall cage) → min/max heuristic for L/W
+     * faceSepAxis ('x'|'y'|'z') — face separation axis from _detectFaceSepAxis():
+     *   'x' → faces separated on IFC-X → width = spanX, length = spanY
+     *   'y' → faces separated on IFC-Y → width = spanY, length = spanX
+     *   'z' → slab cage (T/B layers) → no horizontal face constraint, use max heuristic
      *
      * Returns (all mm, rounded to nearest mm):
      *   edbWidth   — all bars (allBarBbox): full cage cross-section for EDB
@@ -374,14 +374,17 @@ class Viewer3D {
      *   overallWidth  — all geometry (totalBrepBbox): overall width for website display
      *   overallLength — all geometry (totalBrepBbox): overall length for website display
      */
-    _buildDimensions(cageAxisName = 'Z') {
+    _buildDimensions(faceSepAxis = 'z') {
         const t = this.totalBrepBbox;
         if (t.minX === Infinity) return null;
 
-        // Helper: assign length/width from two horizontal spans using cageAxisName
+        // Helper: assign length/width from two horizontal spans using face separation axis.
+        // faceSepAxis 'x' → width is on IFC-X (engine spanX), length is on IFC-Y (engine spanY).
+        // faceSepAxis 'y' → width is on IFC-Y (engine spanY), length is on IFC-X (engine spanX).
+        // faceSepAxis 'z' (slab) → no face-separation constraint on X/Y; use max heuristic.
         const assignLW = (spanX, spanY) => {
-            if (cageAxisName === 'X') return { L: spanX, W: spanY };
-            if (cageAxisName === 'Y') return { L: spanY, W: spanX };
+            if (faceSepAxis === 'x') return { L: spanY, W: spanX };
+            if (faceSepAxis === 'y') return { L: spanX, W: spanY };
             return { L: Math.max(spanX, spanY), W: Math.min(spanX, spanY) };
         };
 
