@@ -41,6 +41,52 @@ geometric reasons, not by coincidence.
 
 ---
 
+## Dimension Logic Must Use Geometry-Based Axis Detection, Never cageAxisName Heuristic (April 2026)
+
+**Mistake:** `_buildDimensions()` and `extractSlabData()` drove dimension assignment off `cageAxisName` — the parser's unique-perpendicular-positions ratio. This heuristic is unreliable: P7349 returns `cageAxisName='Z'` (vertical bars dominate the ratio) even though the cage runs in Y, causing width/length assignment to default to dumb `max/min` fallbacks and slab axis detection to produce wrong EDB dimensions.
+
+**Root cause pattern:** Using a heuristic that works on your test cage instead of deriving the answer from geometry. `cageAxisName` is a proxy that captures "which axis has the most unique positions," not "which axis separates the two formwork faces."
+
+**Correct approach:** Replace all `cageAxisName`-driven dimension logic with `_detectFaceSepAxis()` (geometry-based):
+
+1. **Wall cage dimension assignment** (`_buildDimensions` in `viewer3d.js`):
+   ```javascript
+   // OLD (wrong): if (cageAxisName === 'X') return { L: spanX, W: spanY };
+   // NEW (correct):
+   if (faceSepAxis === 'x') return { L: spanY, W: spanX };  // faces in X → length in Y
+   if (faceSepAxis === 'y') return { L: spanX, W: spanY };  // faces in Y → length in X
+   return { L: Math.max(spanX, spanY), W: Math.min(spanX, spanY) }; // slab: max/min heuristic
+   ```
+
+2. **Slab cage axis detection** (`extractSlabData` in `ifc-parser.js`):
+   ```javascript
+   // OLD (wrong): const lenAxis = this.cageAxisName === 'Y' ? 'X' : 'Y';
+   // NEW (correct): Use T2/B2 bar direction vectors (horizontal bars point along the length axis)
+   const t2DirX = t2.reduce((s, b) => s + Math.abs(b.Dir_X ?? 0), 0);
+   const t2DirY = t2.reduce((s, b) => s + Math.abs(b.Dir_Y ?? 0), 0);
+   const lenAxis = (!t2.length || t2DirX === t2DirY) ? 'X' : (t2DirX > t2DirY ? 'X' : 'Y');
+   ```
+
+**How _detectFaceSepAxis() works:** Compares max within-layer coordinate spread on X vs Y across all face layers (F/N or T/B). Face bars cluster tightly on the separation axis (e.g. F1A bars all at X±50mm) and spread wide on the length axis (Y±10,267mm). The separation axis = axis with the smallest max within-layer range.
+
+| sepAxis | Face layout | Width axis | Length axis |
+|---|---|---|---|
+| `'x'` | Faces separated in IFC-X | spanX | spanY |
+| `'y'` | Faces separated in IFC-Y | spanY | spanX |
+| `'z'` | Slab (T/B only, no X/Y separation) | max heuristic | max heuristic |
+
+**Verified across all test cages:**
+- P7019: wall X-running, sepAxis='y' → width=321mm, length=7,900mm ✓
+- P7349: wall Y-running, sepAxis='x' → width=1,357mm, length=10,267mm ✓
+- 1613: wall X-running, sepAxis='y' → width=321mm, length=7,900mm ✓
+- RF35: slab, sepAxis='z' → EDB H36/I36 from T2/B2 direction detection ✓
+
+**Rule:** Any code that assigns width/length or derives slab dimensions must call `_detectFaceSepAxis()` or use passed-in `faceSepAxis` parameter. Never use `cageAxisName` for this. The parser's `cageAxisName` is informational only (CSV, Excel, UI badge).
+
+**Why this works:** Face geometry is the semantic ground truth — which axis separates the two concrete formwork faces is unambiguous. `cageAxisName`'s ratio-based detection is accidentally correct only when test-cage orientation happens to match your assumption.
+
+---
+
 ## Axis-Extent vs Bar-Role Dimension Bug (H36/I36 — March 2026)
 
 **Mistake:** When computing slab cage dimensions H36 (length) and I36 (height), the implementation used X/Y world-coordinate extents of all mesh bars instead of deriving from the specific bar roles (T1/T2/B1/B2) defined in the spec.
@@ -131,17 +177,15 @@ guard. This caused two problems:
 
 ---
 
-## cageAxisName Must Be Passed to loadIFC() (March 2026)
+## cageAxisName Must Be Passed to loadIFC() — SUPERSEDED (March 2026 → April 2026)
 
-**Mistake:** `_buildDimensions()` used `Math.min/max(spanX, spanZ)` heuristic to assign length vs
-width. This is brittle for near-square cages and doesn't use the semantic information the parser
-already computed.
+**Original lesson (March):** Pass `cageAxisName` from parser to `_buildDimensions()` to avoid brittle max/min heuristic.
 
-**Rule:** Pass `cageAxisName` from `parser.cageAxisName` to `viewer.loadIFC(arrayBuffer, barMap, cageAxisName)`.
-In `_buildDimensions(cageAxisName)`, use `assignLW(spanX, spanY)`:
-- `'X'` → spanX = length, spanY = width
-- `'Y'` → spanY = length, spanX = width
-- `'Z'` → vertical cage, both horizontal → fallback to min/max (still fine for typical rectangular plan)
+**Update (April):** This lesson is now **superseded** by the "Dimension Logic Must Use Geometry-Based Axis Detection" lesson above. The March approach of passing `cageAxisName` turned out to be a stepping stone to the real solution: don't use `cageAxisName` at all for dimension logic. Use `faceSepAxis` (geometry-based) instead.
+
+**Why it didn't work:** P7349's parser returns `cageAxisName='Z'`, so the `assignLW()` logic never fires → dimension assignment still falls back to max/min. The root problem is that `cageAxisName` encodes axis-dominance (vertical bars outnumber horizontal ones), not wall orientation.
+
+**Migration path:** Existing code that receives `cageAxisName` parameter should migrate to receiving `faceSepAxis` from `_detectFaceSepAxis()` before the call, then use that for all dimension logic.
 
 ---
 
@@ -347,13 +391,11 @@ px: +(useLongY ? h.yMm - globalMinY : h.xMm - globalMinX).toFixed(1)
 
 ---
 
-## Face Sep Axis Detection — Geometry-Based, Not cageAxisName (March 2026)
+## Face Sep Axis Detection — Now Drives All Dimension Logic (March → April 2026)
 
-**Problem:** `_bucketHolesByFace` originally used `cageAxisName === 'Y'` to set `sepAxis='x'`. For P7349 the parser returns `cageAxisName='Z'` (wall's vertical bars dominate the detection), so `sepAxis` defaulted to `'y'` → wrong bucketing (holes spread to inner layers F3A/N3A instead of outer F1A/N1A).
+**Original problem (March):** `_bucketHolesByFace` used `cageAxisName === 'Y'` to set `sepAxis='x'`. For P7349 the parser returns `cageAxisName='Z'` (wall's vertical bars dominate the detection), so `sepAxis` defaulted to `'y'` → wrong bucketing.
 
-**Root cause:** `cageAxisName` is the axis along which the most unique bar positions exist when looking perpendicular — dominated by vertical bars in a wall cage. It is NOT reliable as a proxy for wall orientation.
-
-**Correct approach:** Compare the **within-layer spread** on each axis across all face layers. Face bars in the same layer are tightly clustered on the separation axis (e.g. all F1A bars share X≈1,979,345 ± 50mm) but spread wide on the length axis (full 10,267mm in Y). The separation axis = axis with the smallest maximum within-layer range.
+**Solution (March):** Implement geometry-based detection in `_detectFaceSepAxis()` — compare within-layer coordinate spread on X vs Y. Face bars cluster tightly on the separation axis (e.g. F1A at X±50mm) but spread wide on the length axis (Y±10,267mm). The separation axis = smallest max within-layer range.
 
 ```javascript
 const maxRange = (key) => Math.max(...layers.map(pts => {
@@ -363,9 +405,13 @@ const maxRange = (key) => Math.max(...layers.map(pts => {
 return maxRange('x') < maxRange('y') ? 'x' : 'y';
 ```
 
-**P7349 result:** xMaxRange ≈ 50mm (all F1A/N1A bars tightly clustered in X within each layer), yMaxRange ≈ 10,267mm (bars spread along wall length). 50 < 10,267 → `sepAxis='x'` ✓
+**Scope expansion (April):** `_detectFaceSepAxis()` is now **the primary mechanism** for all dimension-driving logic, not just template bucketing:
+- `_buildDimensions()` in viewer3d.js — width/length assignment
+- `exportTemplateDXF()` — px/pz coordinate projection
+- `exportFaceViewDXF()` — face coordinate system
+- `extractSlabData()` — slab cage axis detection (now via T2/B2 direction vectors, same philosophy)
 
-**Why median comparison fails:** Layer Y-medians differ by up to 2,197mm (inner layers have bars at different Y distributions) — more than the 1,304mm X-spread between face layers. Median comparison would incorrectly choose Y.
+**P7349 verification:** xMaxRange ≈ 50mm, yMaxRange ≈ 10,267mm → `sepAxis='x'` ✓ Correctly buckets all 162 holes to F1A/N1A outer faces.
 
 ---
 

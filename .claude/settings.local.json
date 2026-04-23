@@ -1,0 +1,11 @@
+{
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "aidesigner"
+  ],
+  "permissions": {
+    "allow": [
+      "mcp__aidesigner__get_credit_status"
+    ]
+  }
+}

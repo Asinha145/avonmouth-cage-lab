@@ -146,9 +146,27 @@
 
 ---
 
+## Session 5 — Template Name Text (09 Apr 2026) ✅
+
+### I1 — Gap-based text placement ✅
+- [x] Project holes onto short axis, group into bands (±5mm tolerance)
+- [x] Build gap list (plate edges + spaces between bands), pick widest gap
+- [x] Place text analytically centred in best gap — no scan loop
+
+### I2 — 1:15 aspect ratio sizing ✅
+- [x] Fixed design target: fs=20mm, tw=300mm (ratio 1:15)
+- [x] If plateLong − 30 < 300mm: tw = plateLong − 30, fs = tw/15
+- [x] c/c gap still caps fs to avoid hole overlap
+
+### I3 — DXF width factor ✅
+- [x] Added group code 41 (X scale factor) to TEXT() in exportTemplateDXF
+- [x] wf = TEXT_RATIO / (nChars × 0.73) — calibrated from AutoCAD measurement
+- [x] Forces rendered string to exactly fill tw (26-char name: 328mm → 259mm ✓)
+
+---
+
 ## Pending
 
-- [ ] Test template DXF in AutoCAD — confirm colours, screw holes, bar-end dims (browser viewer confirmed)
 - [ ] N1A face orientation check — may need left-right mirror for "outside N1A" view
 - [ ] Title block fields: project name, originator logo, DRAWN/CHECKED/APPROVED names, Purpose of Issue
 

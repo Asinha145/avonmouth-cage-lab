@@ -95,6 +95,18 @@ Critical fixes verified against P7349 (10,267mm Y-running wall cage, 162 VS/HS c
 - **Progress bar** — async `exportTemplateDXF` with `showProgress` / `updateProgress` so the UI stays responsive on large files.
 - **Verified P7349 output**: F1A = 74 holes (25 VS + 49 HS), N1A = 88 holes (all HS) in 5 plates of ~20 holes each (10+10 parallel rows, ~1850×217mm).
 
+### v7 — Dimension Axis Refactor: Geometry-Based vs Heuristic (23 Apr 2026)
+Complete replacement of `cageAxisName` heuristic with BREP geometry-based axis detection:
+- **loadIFC() signature**: param `cageAxisName` → `faceSepAxis` (from `_detectFaceSepAxis()`)
+- **_buildDimensions()**: `assignLW()` logic now driven by face separation axis, not axis-name heuristic
+  - `'x'` (faces on X) → width=spanX, length=spanY
+  - `'y'` (faces on Y) → width=spanY, length=spanX
+  - `'z'` (slab) → max/min heuristic (no horizontal face constraint)
+- **Slab axis detection**: `extractSlabData()` slab axis now from T2 bar direction vectors (sum |Dir_X| vs |Dir_Y|), not `cageAxisName === 'Y'` check. Works across all vendor formats.
+- **Dead code removal**: `dotCage()` function deleted (never called, heuristic replaced by geometry).
+- **BREP validation**: test-dims.mjs now validates BREP F1/N1 running direction against parser detection. P7019: 6/6 assertions pass (0mm diff); P7349: correctly identifies faces on X despite parser returning Z.
+- **All 4 test cages pass**: wall (P7019, 1613, P7349) and slab (RF35) — geometry-based detection consistent across ATK/ICOS/INGEROP vendors.
+
 ---
 
 ## Changelog

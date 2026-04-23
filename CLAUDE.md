@@ -85,8 +85,12 @@ IFC file upload
 
 **Never consolidate.** Coupler heads and struts extend beyond core mesh in different dimensions.
 
-### Cage-Axis Detection
-Unique-perpendicular-positions ratio per axis. Highest ratio = long axis. Works on X/Y/Z-running and slab cages. **Never revert to weighted span.**
+### Cage-Axis Detection (Parser Only)
+The parser's `detectCageAxis()` computes `cageAxisName` (X/Y/Z) using unique-perpendicular-positions ratio per axis. This is used **only as an informational label** (CSV/Excel/badge display). 
+
+**Do not use `cageAxisName` for dimension-driving logic.** The parser's ratio heuristic is unreliable for horizontal-axis detection — P7349 returns 'Z' (vertical bars dominate the ratio) even though the cage runs in Y, forcing `_buildDimensions()` to fall back to dumb max/min heuristics.
+
+See "Face Separation Axis Detection (LOCKED)" below for the correct approach.
 
 ### Stagger Clustering
 1. Split into Z-bands (500mm tolerance) — prevents bottom/top mesh mixing
@@ -98,9 +102,13 @@ Validated: 47→16 clusters on reference cage. Do not change thresholds without 
 `pset Weight > formula weight (π×r²×L×7777) > 0`
 Pset authoritative. Formula for fallback/UDL only. Never use formula for cage totals.
 
-### Face Separation Axis Detection (LOCKED)
-`_detectFaceSepAxis()` — geometry-based, not from `cageAxisName`. Compares max within-layer spread on X vs Y: face bars cluster tightly on separation axis.
-**All functions using face coordinates must call this. Never use `cageAxisName` for face operations.**
+### Face Separation Axis Detection (LOCKED) — Replaces cageAxisName
+`_detectFaceSepAxis()` — geometry-based detection, not a heuristic. Compares max within-layer spread on X vs Y across all face layers (F/N or T/B):
+- Face bars are tightly clustered on the **separation axis** (F1A all bars at X±50mm)
+- Face bars spread the full cage length on the **other horizontal axis** (Y±10,267mm)
+- Returns `'x'`, `'y'`, or `'z'` (slab, no horizontal separation)
+
+**Critical:** All dimension-driving and coordinate-projection logic calls this function. Never substitute `cageAxisName`. The parser's ratio-based axis detection is unreliable for horizontal geometry — it gets dominated by vertical-bar counts.
 
 ### PRL/PRC Zone Classification
 Three-zone spatial classifier (not AABB):
@@ -172,6 +180,8 @@ python -m http.server 8000      # local dev server (WASM needs HTTP, not file://
 - Pset weight authoritative — formula is fallback only
 - `tasks/output-spec.md` is the contract — read before changing any export
 - `templates/*.xlsm` gitignored — never commit, local-only
+- **Dimension logic drives off `_detectFaceSepAxis()` output, never `cageAxisName`** — cageAxisName is informational only
+- Slab cage axis detection uses **T2/B2 bar direction vectors** (sum |Dir_X| vs |Dir_Y|), not cageAxisName
 - Every new feature must handle all three `sepAxis` cases (`'x'`, `'y'`, `'z'`)
 - H36/I36 slab EDB cells from bar `Length` property — never from world-axis coordinate extents
 
