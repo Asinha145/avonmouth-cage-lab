@@ -40,7 +40,7 @@ let _brepReady        = false;
 document.addEventListener('DOMContentLoaded', async () => {
 
     // ── Passcode gate ──────────────────────────────────────────────────
-    const PASSCODE = 'avon2026';   // change before deploy
+    const PASSCODE = '4286';
 
     function _unlockTool() {
         document.getElementById('passcode-section').classList.add('hidden');
