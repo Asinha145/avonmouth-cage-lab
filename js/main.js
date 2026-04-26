@@ -3263,8 +3263,8 @@ async function exportTemplateSVG() {
             let section = `<g transform="translate(50, ${yOffset})"><text class="title" x="0" y="0" font-size="16" font-weight="bold" font-family="monospace">${prodNum}-${cageRef} — ${faceName} SITE TEMPLATE V2</text><g transform="translate(0, 50)">`;
 
             for (const hull of barHulls) {
-                const hullPts = hull.map(p => `${p[0] - minPx},${p[1] - minPz}`).join(' ');
-                section += `<polyline points="${hullPts}" class="bars" fill="none" stroke="#333" stroke-width="1.5"/>`;
+                const hullPts = hull.map(p => `${(p[0] - globalDatumPx) - minPx},${(p[1] - globalDatumPz) - minPz}`).join(' ');
+                section += `<polygon points="${hullPts}" class="bars" fill="none" stroke="#333" stroke-width="1.5"/>`;
             }
 
             for (const h of plotHoles) {
@@ -3326,26 +3326,27 @@ async function exportCOGSVG() {
         const vertexClouds = viewer.getFaceLayerVertexClouds(faceLayer);
         if (!vertexClouds.length) throw new Error(`No BREP for ${faceLayer}.`);
 
-        const allPts = [];
+        const engineToFace2D = ([ex, ey, ez]) => {
+            const ix = ex * 1000, iy = -ez * 1000, iz = ey * 1000;
+            if (sepAxis === 'x') return [iy - datumPx, iz - datumPz];
+            if (sepAxis === 'y') return [ix - datumPx, iz - datumPz];
+            return [ix - datumPx, iy - datumPz];
+        };
+
+        const barHulls = [];
         for (const cloud of vertexClouds) {
-            for (const [ex, ey, ez] of cloud) {
-                const ix = ex * 1000, iy = -ez * 1000, iz = ey * 1000;
-                let px, pz;
-                if (sepAxis === 'x') { px = iy - datumPx; pz = iz - datumPz; }
-                else if (sepAxis === 'y') { px = ix - datumPx; pz = iz - datumPz; }
-                else { px = ix - datumPx; pz = iy - datumPz; }
-                allPts.push([px, pz]);
-            }
+            const hull = convexHull2D(cloud.map(engineToFace2D));
+            if (hull.length >= 2) barHulls.push(hull);
         }
 
-        const hull = convexHull2D(allPts);
         let cogPx = (sepAxis === 'x') ? (cog.ifcY - datumPx) : (cog.ifcX - datumPx);
         let cogPz = cog.ifcZ - datumPz;
 
         const datumEnds = _getDatumBarEnds(faceLayer, datumSide, heightSide, sepAxis, false, false, datumPx, datumPz);
 
-        const allX = [...hull.map(p => p[0]), cogPx];
-        const allZ = [...hull.map(p => p[1]), cogPz];
+        const allHullPts = barHulls.flat();
+        const allX = [...allHullPts.map(p => p[0]), cogPx];
+        const allZ = [...allHullPts.map(p => p[1]), cogPz];
         const minX = Math.min(...allX) - 100;
         const maxX = Math.max(...allX) + 100;
         const minZ = Math.min(...allZ) - 100;
@@ -3353,8 +3354,11 @@ async function exportCOGSVG() {
 
         let svgContent = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${minX} ${minZ} ${maxX - minX} ${maxZ - minZ}"><defs><style>.outline { stroke:#333; stroke-width:1.5 } .cog-marker { stroke:#cc0000; stroke-width:1.5 } .dims { stroke:#888; stroke-width:0.8 } .text { font-family:monospace; font-size:10px }</style></defs><text x="${minX + 20}" y="${minZ + 25}" class="text" font-weight="bold" font-size="14">${prodNum}-${cageRef} COG V2 — ${faceLayer}</text>`;
 
-        const hullStr = hull.map(p => `${p[0]},${p[1]}`).join(' ');
-        svgContent += `<polyline points="${hullStr}" class="outline" fill="none"/><circle cx="${cogPx}" cy="${cogPz}" r="15" class="cog-marker" fill="none"/><line x1="${cogPx - 25}" y1="${cogPz}" x2="${cogPx + 25}" y2="${cogPz}" class="cog-marker"/><line x1="${cogPx}" y1="${cogPz - 25}" x2="${cogPx}" y2="${cogPz + 25}" class="cog-marker"/>`;
+        for (const hull of barHulls) {
+            const hullStr = hull.map(p => `${p[0]},${p[1]}`).join(' ');
+            svgContent += `<polygon points="${hullStr}" class="outline" fill="none"/>`;
+        }
+        svgContent += `<circle cx="${cogPx}" cy="${cogPz}" r="15" class="cog-marker" fill="none"/><line x1="${cogPx - 25}" y1="${cogPz}" x2="${cogPx + 25}" y2="${cogPz}" class="cog-marker"/><line x1="${cogPx}" y1="${cogPz - 25}" x2="${cogPx}" y2="${cogPz + 25}" class="cog-marker"/>`;
 
         if (datumEnds) {
             const dimY = cogPz + 80, dimX = cogPx - 100;
