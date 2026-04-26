@@ -125,6 +125,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('export-slab-btn').addEventListener('click',   () => exportSlabEDB());
     document.getElementById('export-report-btn').addEventListener('click', () => exportCageReport());
     document.getElementById('export-template-dxf-btn').addEventListener('click', () => exportTemplateDXF(2000, 300).catch(e => console.error(e)));
+    document.getElementById('export-template-svg-btn').addEventListener('click', () => exportTemplateSVG().catch(e => console.error('[templateSVG]', e)));
     document.getElementById('export-face-dxf-btn').addEventListener('click', () => {
         const face = document.getElementById('face-view-select')?.value;
         if (face) exportFaceViewDXF(face);
@@ -134,6 +135,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
     document.getElementById('export-cog-dxf-btn').addEventListener('click', () => {
         exportCOGDXF().catch(e => console.error('[cogDXF]', e));
+    });
+    document.getElementById('export-cog-svg-btn').addEventListener('click', () => {
+        exportCOGSVG().catch(e => console.error('[cogSVG]', e));
     });
     document.getElementById('edb-wall-thickness').addEventListener('input', updateEDBComputedInfo);
 
@@ -358,8 +362,8 @@ function _resetDatum() {
 function _setExportsEnabled(enabled) {
     const ids = [
         'export-excel-btn', 'export-ubars-btn', 'export-struts-btn',
-        'export-slab-btn', 'export-report-btn', 'export-template-dxf-btn',
-        'export-combined-dxf-btn', 'export-face-dxf-btn', 'export-cog-dxf-btn'
+        'export-slab-btn', 'export-report-btn', 'export-template-dxf-btn', 'export-template-svg-btn',
+        'export-combined-dxf-btn', 'export-face-dxf-btn', 'export-cog-dxf-btn', 'export-cog-svg-btn'
     ];
     ids.forEach(id => {
         const btn = document.getElementById(id);
@@ -382,12 +386,18 @@ function _applySecondaryGates() {
         reportBtn.classList.toggle('hidden', _parserRejected);
         if (_parserRejected) reportBtn.setAttribute('disabled', '');
     }
-    // Template DXF gate: VS/HS coupler presence
+    // Template DXF/SVG gate: VS/HS coupler presence
     const templateDxfBtn = document.getElementById('export-template-dxf-btn');
+    const templateSvgBtn = document.getElementById('export-template-svg-btn');
     if (templateDxfBtn) {
         const hasVSHS = [..._couplerMap.values()].some(c => /^(VS|HS)/i.test(c.layer || ''));
         templateDxfBtn.classList.toggle('hidden', !hasVSHS);
         if (!hasVSHS) templateDxfBtn.setAttribute('disabled', '');
+    }
+    if (templateSvgBtn) {
+        const hasVSHS = [..._couplerMap.values()].some(c => /^(VS|HS)/i.test(c.layer || ''));
+        templateSvgBtn.classList.toggle('hidden', !hasVSHS);
+        if (!hasVSHS) templateSvgBtn.setAttribute('disabled', '');
     }
     // Slab EDB visibility
     const slabBtn = document.getElementById('export-slab-btn');
@@ -399,10 +409,11 @@ function _applySecondaryGates() {
         if (slabBtn)  slabBtn.style.display = 'none';
         if (wallEdb)  wallEdb.style.display = '';
     }
-    // Face/combined DXF — only enable if BREP is ready
+    // Face/combined DXF + COG SVG — only enable if BREP is ready
     if (!_brepReady) {
         document.getElementById('export-face-dxf-btn')?.setAttribute('disabled', '');
         document.getElementById('export-combined-dxf-btn')?.setAttribute('disabled', '');
+        document.getElementById('export-cog-svg-btn')?.setAttribute('disabled', '');
     }
 }
 
@@ -951,6 +962,39 @@ function renderTable() {
         `Page ${currentPage} of ${totalPages}  (${filteredData.length} bars)`;
     document.getElementById('page-prev').disabled = currentPage <= 1;
     document.getElementById('page-next').disabled = currentPage >= totalPages;
+}
+
+// ── SVG Print Helper ──────────────────────────────────────────────────────
+
+function _printSVG(svgStr, title) {
+    const win = window.open('', '_blank');
+    win.document.write(
+        `<!DOCTYPE html><html><head><title>${title}</title>` +
+        `<style>@media print{body{margin:0}}body{margin:0;padding:8px}svg{display:block;width:100%;height:auto}</style>` +
+        `</head><body>${svgStr}</body></html>`
+    );
+    win.document.close();
+    win.addEventListener('load', () => win.print());
+}
+
+// ── Convex Hull (Module-Level) ────────────────────────────────────────────
+
+function convexHull2D(pts) {
+    if (!pts || pts.length === 0) return [];
+    if (pts.length <= 2) return pts;
+    const sorted = pts.slice().sort((a, b) => a[0] !== b[0] ? a[0] - b[0] : a[1] - b[1]);
+    const cross = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+    const build = (arr) => {
+        const hull = [];
+        for (const p of arr) {
+            while (hull.length >= 2 && cross(hull[hull.length - 2], hull[hull.length - 1], p) <= 0) hull.pop();
+            hull.push(p);
+        }
+        return hull;
+    };
+    const lower = build(sorted);
+    const upper = build(sorted.reverse());
+    return [...lower.slice(0, -1), ...upper.slice(0, -1)];
 }
 
 // ── Export CSV ─────────────────────────────────────────────────────────
@@ -3151,6 +3195,181 @@ function buildZip(files) {
     let pos = 0;
     for (const a of all) { out.set(a, pos); pos += a.length; }
     return new Blob([out], { type: 'application/zip' });
+}
+
+// ── Site Template SVG/PDF (V2) — Based on exportCombinedFaceDXF ──────────
+
+async function exportTemplateSVG() {
+    if (!_datumSet) { alert('Set datum before exporting.'); return; }
+
+    const prodNum = _productionNumber || '';
+    const cageRef = _cageReference || 'cage';
+
+    try {
+        if (!_rawIfcText) throw new Error('No IFC data loaded.');
+        const viewer = window._viewer3d;
+        if (!viewer || !viewer.brepLoaded) throw new Error('3D geometry not loaded.');
+
+        const allHoles = _parseIFCBeamHoles(_rawIfcText);
+        if (!allHoles.length) throw new Error('No VS/HS coupler holes found.');
+
+        const faceBuckets = _bucketHolesByFace(allHoles);
+        const { datumPx: globalDatumPx, datumPz: globalDatumPz } = _cageDatum();
+        const faceSepAxis = _detectFaceSepAxis();
+        const datumSide = document.getElementById('datum-side-select')?.value || 'left';
+        const heightSide = document.getElementById('slab-face-select')?.value || 'bottom';
+
+        const engineToFace2D = ([ex, ey, ez]) => {
+            const ix = ex * 1000, iy = -ez * 1000, iz = ey * 1000;
+            if (faceSepAxis === 'x') return [iy, iz];
+            if (faceSepAxis === 'y') return [ix, iz];
+            return [ix, iy];
+        };
+
+        let svgParts = [];
+        let yOffset = 100;
+
+        for (const [faceName, faceHoles] of Object.entries(faceBuckets)) {
+            const clouds = viewer.getFaceLayerVertexClouds(faceName);
+            const barHulls = [];
+            for (const cloud of clouds) {
+                const pts2d = cloud.map(engineToFace2D);
+                const hull = convexHull2D(pts2d);
+                if (hull.length >= 2) barHulls.push(hull);
+            }
+
+            const faceZArr = faceHoles.map(h => h.zMm);
+            const zSpan = Math.max(...faceZArr) - Math.min(...faceZArr);
+            const useY = zSpan < 100;
+            const useLongY = faceSepAxis === 'x' && !useY;
+
+            const plotHoles = faceHoles
+                .map(h => ({...h,
+                    px: +(useLongY ? h.yMm - globalDatumPx : h.xMm - globalDatumPx).toFixed(1),
+                    pz: +((useY ? h.yMm : h.zMm) - globalDatumPz).toFixed(1)}))
+                .sort((a, b) => a.px !== b.px ? a.px - b.px : a.pz - b.pz);
+
+            const { vsPlates, hsPlates } = _computePlates(plotHoles, 2000, 300);
+            const datumEnds = _getDatumBarEnds(faceName, datumSide, heightSide, faceSepAxis,
+                                             useLongY, useY, globalDatumPx, globalDatumPz);
+
+            const minPx = Math.min(...plotHoles.map(h => h.px));
+            const maxPx = Math.max(...plotHoles.map(h => h.px));
+            const minPz = Math.min(...plotHoles.map(h => h.pz));
+            const maxPz = Math.max(...plotHoles.map(h => h.pz));
+            const sectionW = maxPx - minPx + 200;
+            const sectionH = maxPz - minPz + 200;
+
+            let section = `<g transform="translate(50, ${yOffset})"><text class="title" x="0" y="0" font-size="16" font-weight="bold" font-family="monospace">${prodNum}-${cageRef} — ${faceName} SITE TEMPLATE V2</text><g transform="translate(0, 50)">`;
+
+            for (const hull of barHulls) {
+                const hullPts = hull.map(p => `${p[0] - minPx},${p[1] - minPz}`).join(' ');
+                section += `<polyline points="${hullPts}" class="bars" fill="none" stroke="#333" stroke-width="1.5"/>`;
+            }
+
+            for (const h of plotHoles) {
+                const hx = h.px - minPx, hz = h.pz - minPz;
+                section += `<circle cx="${hx}" cy="${hz}" r="${h.holeDia/2}" class="holes" fill="none" stroke="#cc0000" stroke-width="1.5"/>`;
+            }
+
+            for (const plate of [...vsPlates, ...hsPlates]) {
+                const x0 = plate.minX - minPx, z0 = plate.minZ - minPz;
+                const x1 = plate.maxX - minPx, z1 = plate.maxZ - minPz;
+                section += `<rect x="${x0}" y="${z0}" width="${x1-x0}" height="${z1-z0}" class="plates" fill="none" stroke="#0055cc" stroke-width="1.5"/>`;
+                const labelTxt = `${cageRef}-${faceName}-${plate.type}-PLATE-${String(plate.id).padStart(2,'0')}`;
+                section += `<text x="${(x0+x1)/2}" y="${z1 + 15}" font-size="10" text-anchor="middle" font-family="monospace">${labelTxt}</text>`;
+            }
+
+            if (datumEnds) {
+                for (const hole of plotHoles) {
+                    const hx = hole.px - minPx, hz = hole.pz - minPz;
+                    if (hole.layer?.toUpperCase().startsWith('HS')) {
+                        const dim = Math.round(hole.px - (datumEnds.hBarEndPx || 0));
+                        section += `<line x1="0" y1="${hz - 30}" x2="${hx}" y2="${hz - 30}" class="dims" stroke="#888" stroke-width="0.8"/><text x="${hx/2}" y="${hz - 35}" font-size="8" text-anchor="middle" font-family="monospace">${dim}</text>`;
+                    }
+                }
+            }
+
+            section += `</g></g>`;
+            svgParts.push(section);
+            yOffset += sectionH + 150;
+        }
+
+        const svgContent = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2000 ${yOffset + 200}"><defs><style>.title { font-size:14px; font-weight:bold; font-family:monospace } .bars { stroke:#333; stroke-width:1.5 } .holes { stroke:#cc0000; stroke-width:1.5 } .plates { stroke:#0055cc; stroke-width:1.5 } .dims { stroke:#888; stroke-width:0.8 }</style></defs>${svgParts.join('')}</svg>`;
+        _printSVG(svgContent, `${prodNum}-${cageRef}-template-v2`);
+
+    } catch (e) {
+        console.error('[templateSVG]', e);
+        alert(`Error: ${e.message}`);
+    }
+}
+
+// ── COG SVG/PDF (V2) ────────────────────────────────────────────────────
+
+async function exportCOGSVG() {
+    if (!_datumSet) { alert('Set datum before exporting.'); return; }
+    if (!_wasm3DDims?.cog) { alert('COG data not available.'); return; }
+
+    const prodNum = _productionNumber || '';
+    const cageRef = _cageReference || 'cage';
+    const sepAxis = _detectFaceSepAxis();
+    const datumSide = document.getElementById('datum-side-select')?.value || 'left';
+    const heightSide = document.getElementById('slab-face-select')?.value || 'bottom';
+    const { datumPx, datumPz } = _cageDatum();
+    const cog = _wasm3DDims.cog;
+
+    try {
+        const viewer = window._viewer3d;
+        if (!viewer || !viewer.brepLoaded) throw new Error('3D geometry not loaded.');
+
+        let faceLayer = sepAxis === 'z' ? (heightSide === 'top' ? 'T1A' : 'B1A') : 'N1A';
+        const vertexClouds = viewer.getFaceLayerVertexClouds(faceLayer);
+        if (!vertexClouds.length) throw new Error(`No BREP for ${faceLayer}.`);
+
+        const allPts = [];
+        for (const cloud of vertexClouds) {
+            for (const [ex, ey, ez] of cloud) {
+                const ix = ex * 1000, iy = -ez * 1000, iz = ey * 1000;
+                let px, pz;
+                if (sepAxis === 'x') { px = iy - datumPx; pz = iz - datumPz; }
+                else if (sepAxis === 'y') { px = ix - datumPx; pz = iz - datumPz; }
+                else { px = ix - datumPx; pz = iy - datumPz; }
+                allPts.push([px, pz]);
+            }
+        }
+
+        const hull = convexHull2D(allPts);
+        let cogPx = (sepAxis === 'x') ? (cog.ifcY - datumPx) : (cog.ifcX - datumPx);
+        let cogPz = cog.ifcZ - datumPz;
+
+        const datumEnds = _getDatumBarEnds(faceLayer, datumSide, heightSide, sepAxis, false, false, datumPx, datumPz);
+
+        const allX = [...hull.map(p => p[0]), cogPx];
+        const allZ = [...hull.map(p => p[1]), cogPz];
+        const minX = Math.min(...allX) - 100;
+        const maxX = Math.max(...allX) + 100;
+        const minZ = Math.min(...allZ) - 100;
+        const maxZ = Math.max(...allZ) + 100;
+
+        let svgContent = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${minX} ${minZ} ${maxX - minX} ${maxZ - minZ}"><defs><style>.outline { stroke:#333; stroke-width:1.5 } .cog-marker { stroke:#cc0000; stroke-width:1.5 } .dims { stroke:#888; stroke-width:0.8 } .text { font-family:monospace; font-size:10px }</style></defs><text x="${minX + 20}" y="${minZ + 25}" class="text" font-weight="bold" font-size="14">${prodNum}-${cageRef} COG V2 — ${faceLayer}</text>`;
+
+        const hullStr = hull.map(p => `${p[0]},${p[1]}`).join(' ');
+        svgContent += `<polyline points="${hullStr}" class="outline" fill="none"/><circle cx="${cogPx}" cy="${cogPz}" r="15" class="cog-marker" fill="none"/><line x1="${cogPx - 25}" y1="${cogPz}" x2="${cogPx + 25}" y2="${cogPz}" class="cog-marker"/><line x1="${cogPx}" y1="${cogPz - 25}" x2="${cogPx}" y2="${cogPz + 25}" class="cog-marker"/>`;
+
+        if (datumEnds) {
+            const dimY = cogPz + 80, dimX = cogPx - 100;
+            const hDim = Math.round(cogPx - (datumEnds.hBarEndPx || 0));
+            const vDim = Math.round(cogPz - (datumEnds.vBarEndPz || 0));
+            svgContent += `<line x1="${datumEnds.hBarEndPx || 0}" y1="${dimY}" x2="${cogPx}" y2="${dimY}" class="dims"/><text x="${((datumEnds.hBarEndPx || 0) + cogPx) / 2}" y="${dimY + 15}" class="text" text-anchor="middle">${hDim} mm</text><line x1="${dimX}" y1="${datumEnds.vBarEndPz || 0}" x2="${dimX}" y2="${cogPz}" class="dims"/><text x="${dimX - 20}" y="${((datumEnds.vBarEndPz || 0) + cogPz) / 2}" class="text" text-anchor="end">${vDim} mm</text>`;
+        }
+
+        svgContent += `<text x="${minX + 20}" y="${maxZ - 20}" class="text">COG: ${cog.totalWeight.toFixed(1)} kg — ${cog.barsUsed} bars</text></svg>`;
+        _printSVG(svgContent, `${prodNum}-${cageRef}-COG-v2`);
+
+    } catch (e) {
+        console.error('[cogSVG]', e);
+        alert(`Error: ${e.message}`);
+    }
 }
 
 async function exportTemplateDXF(maxLength, maxWidth) {
